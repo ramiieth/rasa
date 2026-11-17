@@ -41,7 +41,9 @@ export default function StorefrontClient({
   const [selectedCategory, setSelectedCategory] = useState("همه");
   const [shippingCarrier, setShippingCarrier] = useState<ShippingCarrierCode>("PISHTAZ");
   const [payMode, setPayMode] = useState<"ONLINE_GATEWAY" | "BNPL">("ONLINE_GATEWAY");
-  const [bnplProvider, setBnplProvider] = useState<"SNAPP_PAY" | "TOROB_PAY" | "DIGI_PAY">("SNAPP_PAY");
+  const [bnplProvider, setBnplProvider] = useState<
+    "SHOPINO" | "SNAPP_PAY" | "TOROB_PAY" | "DIGI_PAY"
+  >("SHOPINO");
   const [customerName, setCustomerName] = useState("");
   const [customerMobile, setCustomerMobile] = useState("");
   const [receiverPostalCode, setReceiverPostalCode] = useState("");
@@ -348,7 +350,6 @@ export default function StorefrontClient({
             </div>
 
             <form onSubmit={handleTestCheckout} className="space-y-3 border-t border-slate-100 pt-3">
-              {/* Shipping selector incl. Mahex */}
               <div>
                 <label className="block text-[11px] font-bold text-slate-700 mb-1.5">
                   انتخاب سرویس پستی و لجستیک
@@ -383,7 +384,6 @@ export default function StorefrontClient({
                 </div>
               </div>
 
-              {/* Payment mode: Cash IPG vs 4-Installment BNPL */}
               <div className="space-y-2">
                 <label className="block text-[11px] font-bold text-slate-700">
                   شیوه پرداخت
@@ -399,7 +399,7 @@ export default function StorefrontClient({
                     }`}
                   >
                     <CreditCard className="h-3.5 w-3.5" />
-                    پرداخت نقدی بانکی
+                    درگاه سامان کیش (سپ)
                   </button>
                   <button
                     type="button"
@@ -416,8 +416,9 @@ export default function StorefrontClient({
 
                 {payMode === "BNPL" && (
                   <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-2.5 space-y-2">
-                    <div className="grid grid-cols-3 gap-1.5 text-[11px] font-bold">
+                    <div className="grid grid-cols-4 gap-1.5 text-[11px] font-bold">
                       {[
+                        { id: "SHOPINO", label: "شاپینو" },
                         { id: "SNAPP_PAY", label: "اسنپ‌پی" },
                         { id: "TOROB_PAY", label: "ترب‌پی" },
                         { id: "DIGI_PAY", label: "دیجی‌پی" },

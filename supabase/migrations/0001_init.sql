@@ -1,15 +1,16 @@
--- Rasa (رَسا) MVP Full Schema: Multi-Tenancy, Cardex, Double-Entry ERP, BNPL, Sales Returns, Cheques, Expenses & Multi-Carrier Shipping (incl. Mahex)
+-- Rasa (رَسا) Full Schema: Multi-Tenancy, Cardex, Double-Entry ERP, Customers, SMS Module, Purchase Returns, Manual Parcels, Cheques & Multi-Carrier Shipping
 -- Run this once in Supabase Dashboard -> SQL Editor
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
--- 1. Tenants (فروشگاه‌ها و تنظیمات فرستنده)
+-- 1. Tenants
 CREATE TABLE IF NOT EXISTS tenants (
     id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     slug                    VARCHAR(63) UNIQUE NOT NULL,
     name                    VARCHAR(160) NOT NULL,
     tax_rate                NUMERIC(5,2) NOT NULL DEFAULT 10.00,
     shipping_wallet_balance BIGINT NOT NULL DEFAULT 5000000,
+    sms_balance             BIGINT NOT NULL DEFAULT 1000000,
     sender_phone            VARCHAR(24),
     sender_postal_code      VARCHAR(20),
     sender_address          TEXT,
@@ -30,7 +31,20 @@ CREATE TABLE IF NOT EXISTS tenant_users (
     UNIQUE (tenant_id, email)
 );
 
--- 3. Products & Variants
+-- 3. Customers (اشخاص و مشتریان)
+CREATE TABLE IF NOT EXISTS customers (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    full_name   VARCHAR(160) NOT NULL,
+    mobile      VARCHAR(20) NOT NULL,
+    postal_code VARCHAR(20),
+    address     TEXT,
+    notes       TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (tenant_id, mobile)
+);
+
+-- 4. Products & Variants
 CREATE TABLE IF NOT EXISTS products (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id     UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -58,7 +72,7 @@ CREATE TABLE IF NOT EXISTS product_variants (
     UNIQUE (tenant_id, sku)
 );
 
--- 4. Stock Balances, Reservations & Append-Only Inventory Cardex
+-- 5. Stock Balances & Append-Only Inventory Cardex
 CREATE TABLE IF NOT EXISTS stock_balances (
     variant_id    UUID PRIMARY KEY REFERENCES product_variants(id) ON DELETE CASCADE,
     tenant_id     UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -72,7 +86,7 @@ CREATE TABLE IF NOT EXISTS inventory_cardex (
     id             BIGSERIAL PRIMARY KEY,
     tenant_id      UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     variant_id     UUID NOT NULL REFERENCES product_variants(id) ON DELETE CASCADE,
-    movement_type  VARCHAR(24) NOT NULL CHECK (movement_type IN ('PURCHASE_IN', 'ONLINE_OUT', 'POS_OUT', 'RETURN_IN', 'ADJUSTMENT')),
+    movement_type  VARCHAR(24) NOT NULL CHECK (movement_type IN ('PURCHASE_IN', 'PURCHASE_RETURN', 'ONLINE_OUT', 'POS_OUT', 'RETURN_IN', 'ADJUSTMENT')),
     qty_delta      INT NOT NULL,
     unit_cost      BIGINT NOT NULL DEFAULT 0,
     balance_after  INT NOT NULL,
@@ -82,7 +96,7 @@ CREATE TABLE IF NOT EXISTS inventory_cardex (
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 5. Double-Entry Accounting, Cheques & Expenses
+-- 6. Double-Entry Accounting, Cheques & Expenses
 CREATE TABLE IF NOT EXISTS chart_of_accounts (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id    UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -137,12 +151,32 @@ CREATE TABLE IF NOT EXISTS expenses (
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 6. Orders & Order Items (Online, POS, BNPL & Multi-Carrier Shipping)
+-- 7. SMS Templates & Logs (ماژول رَسا پیامک)
+CREATE TABLE IF NOT EXISTS sms_templates (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id  UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    event_key  VARCHAR(40) NOT NULL,
+    title      VARCHAR(120) NOT NULL,
+    body       TEXT NOT NULL,
+    is_active  BOOLEAN NOT NULL DEFAULT TRUE,
+    UNIQUE (tenant_id, event_key)
+);
+
+CREATE TABLE IF NOT EXISTS sms_logs (
+    id         BIGSERIAL PRIMARY KEY,
+    tenant_id  UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    mobile     VARCHAR(20) NOT NULL,
+    message    TEXT NOT NULL,
+    status     VARCHAR(24) NOT NULL DEFAULT 'SENT',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 8. Orders & Order Items
 CREATE TABLE IF NOT EXISTS orders (
     id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id            UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     order_number         BIGINT NOT NULL,
-    channel              VARCHAR(16) NOT NULL CHECK (channel IN ('ONLINE', 'POS')),
+    channel              VARCHAR(16) NOT NULL CHECK (channel IN ('ONLINE', 'POS', 'MANUAL_PARCEL')),
     payment_method       VARCHAR(24) NOT NULL CHECK (payment_method IN ('ONLINE_GATEWAY', 'BNPL', 'POS_CARD', 'CASH', 'CARD_TO_CARD')),
     bnpl_provider        VARCHAR(24),
     bnpl_installments    INT DEFAULT 1,
@@ -151,9 +185,15 @@ CREATE TABLE IF NOT EXISTS orders (
     shipping_carrier     VARCHAR(24) NOT NULL DEFAULT 'PISHTAZ',
     shipping_status      VARCHAR(24) NOT NULL DEFAULT 'PENDING_PACK',
     tracking_barcode     VARCHAR(40),
+    package_size         VARCHAR(40) DEFAULT 'کارتن سایز ۳',
+    receiver_province    VARCHAR(80),
+    receiver_city        VARCHAR(80),
     receiver_postal_code VARCHAR(20),
     receiver_address     TEXT,
     total_weight_grams   INT NOT NULL DEFAULT 0,
+    print_count          INT NOT NULL DEFAULT 0,
+    is_checked           BOOLEAN NOT NULL DEFAULT FALSE,
+    is_suspended         BOOLEAN NOT NULL DEFAULT FALSE,
     status               VARCHAR(24) NOT NULL DEFAULT 'COMPLETED',
     subtotal             BIGINT NOT NULL DEFAULT 0,
     tax_amount           BIGINT NOT NULL DEFAULT 0,
@@ -178,6 +218,7 @@ CREATE TABLE IF NOT EXISTS order_items (
 
 -- Safe ALTERs for existing databases
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS shipping_wallet_balance BIGINT NOT NULL DEFAULT 5000000;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS sms_balance BIGINT NOT NULL DEFAULT 1000000;
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS sender_phone VARCHAR(24);
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS sender_postal_code VARCHAR(20);
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS sender_address TEXT;
@@ -189,15 +230,24 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS bnpl_installments INT DEFAULT 1;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_carrier VARCHAR(24) NOT NULL DEFAULT 'PISHTAZ';
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_status VARCHAR(24) NOT NULL DEFAULT 'PENDING_PACK';
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS tracking_barcode VARCHAR(40);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS package_size VARCHAR(40) DEFAULT 'کارتن سایز ۳';
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS receiver_province VARCHAR(80);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS receiver_city VARCHAR(80);
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS receiver_postal_code VARCHAR(20);
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS receiver_address TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS total_weight_grams INT NOT NULL DEFAULT 0;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS print_count INT NOT NULL DEFAULT 0;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS is_checked BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS is_suspended BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS refunded_amount BIGINT NOT NULL DEFAULT 0;
 
--- Refresh payment_method check constraint to include BNPL
+-- Refresh constraints safely
+ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_channel_check;
+ALTER TABLE orders ADD CONSTRAINT orders_channel_check CHECK (channel IN ('ONLINE', 'POS', 'MANUAL_PARCEL'));
 ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_payment_method_check;
-ALTER TABLE orders ADD CONSTRAINT orders_payment_method_check
-    CHECK (payment_method IN ('ONLINE_GATEWAY', 'BNPL', 'POS_CARD', 'CASH', 'CARD_TO_CARD'));
+ALTER TABLE orders ADD CONSTRAINT orders_payment_method_check CHECK (payment_method IN ('ONLINE_GATEWAY', 'BNPL', 'POS_CARD', 'CASH', 'CARD_TO_CARD'));
+ALTER TABLE inventory_cardex DROP CONSTRAINT IF EXISTS inventory_cardex_movement_type_check;
+ALTER TABLE inventory_cardex ADD CONSTRAINT inventory_cardex_movement_type_check CHECK (movement_type IN ('PURCHASE_IN', 'PURCHASE_RETURN', 'ONLINE_OUT', 'POS_OUT', 'RETURN_IN', 'ADJUSTMENT'));
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_products_tenant ON products(tenant_id);
@@ -208,6 +258,7 @@ CREATE INDEX IF NOT EXISTS idx_orders_tenant ON orders(tenant_id, created_at DES
 -- Enable RLS
 ALTER TABLE tenants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tenant_users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE customers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE product_variants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE stock_balances ENABLE ROW LEVEL SECURITY;
@@ -217,6 +268,8 @@ ALTER TABLE journal_entries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE journal_lines ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cheques ENABLE ROW LEVEL SECURITY;
 ALTER TABLE expenses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sms_templates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sms_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE order_items ENABLE ROW LEVEL SECURITY;
 
@@ -236,7 +289,7 @@ BEGIN
     END IF;
 END $$;
 
--- Helper to ensure new Chart of Accounts codes exist even on older tenants
+-- Seed default accounts & SMS templates helper
 CREATE OR REPLACE FUNCTION ensure_rasa_accounts(p_tenant_id UUID) RETURNS VOID
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -254,6 +307,12 @@ BEGIN
         (p_tenant_id, '5101', 'بهای تمام‌شده کالای فروش‌رفته (COGS)', 'EXPENSE'),
         (p_tenant_id, '6101', 'هزینه‌های جاری و عملیاتی فروشگاه', 'EXPENSE')
     ON CONFLICT (tenant_id, code) DO NOTHING;
+
+    INSERT INTO sms_templates (tenant_id, event_key, title, body) VALUES
+        (p_tenant_id, 'ORDER_SUCCESS', 'ثبت موفق سفارش خریدار', 'سلام {name} عزیز، سفارش شما به شماره #{order} با موفقیت ثبت شد.'),
+        (p_tenant_id, 'POST_BARCODE', 'ارسال کد رهگیری پستی', 'سفارش #{order} تحویل {carrier} شد. کد رهگیری شما: {barcode}'),
+        (p_tenant_id, 'ADMIN_ALERT', 'اطلاع‌رسانی سفارش جدید به مدیر', 'سفارش جدید #{order} به مبلغ {amount} تومان در فروشگاه ثبت گردید.')
+    ON CONFLICT (tenant_id, event_key) DO NOTHING;
 END;
 $$;
 
@@ -275,12 +334,15 @@ DECLARE
     v_var2 UUID;
     v_purchase_ref UUID := gen_random_uuid();
 BEGIN
-    INSERT INTO tenants (name, slug, shipping_wallet_balance)
-    VALUES (p_name, lower(trim(p_slug)), 5000000)
+    INSERT INTO tenants (name, slug, shipping_wallet_balance, sms_balance)
+    VALUES (p_name, lower(trim(p_slug)), 5000000, 1000000)
     RETURNING id INTO v_tenant_id;
 
     INSERT INTO tenant_users (tenant_id, email, password_hash, full_name, role)
     VALUES (v_tenant_id, lower(trim(p_email)), p_password_hash, 'مدیر ' || p_name, 'OWNER');
+
+    INSERT INTO customers (tenant_id, full_name, mobile, notes)
+    VALUES (v_tenant_id, 'مشتری عمومی', '09110000000', 'مشتری پیش‌فرض صندوق فروش حضوری');
 
     PERFORM ensure_rasa_accounts(v_tenant_id);
 
@@ -289,7 +351,7 @@ BEGIN
     RETURNING id INTO v_prod1;
 
     INSERT INTO product_variants (tenant_id, product_id, sku, barcode, attributes, retail_price, wholesale_price, weight_grams)
-    VALUES (v_tenant_id, v_prod1, 'SHOE-BLK-42', '626000010001', '{"رنگ": "قرمز/مشکی", "سایز": "۴۲"}'::jsonb, 28500000, 24000000, 750)
+    VALUES (v_tenant_id, v_prod1, 'SHOE-BLK-42', '1250', '{"رنگ": "قرمز/مشکی", "سایز": "۴۲"}'::jsonb, 28500000, 24000000, 750)
     RETURNING id INTO v_var1;
 
     INSERT INTO products (tenant_id, title, slug, category_name, image_url)
@@ -297,7 +359,7 @@ BEGIN
     RETURNING id INTO v_prod2;
 
     INSERT INTO product_variants (tenant_id, product_id, sku, barcode, attributes, retail_price, wholesale_price, weight_grams)
-    VALUES (v_tenant_id, v_prod2, 'WATCH-SLV-01', '626000010002', '{"رنگ": "نقره‌ای", "بند": "سیلیکونی"}'::jsonb, 42000000, 36500000, 300)
+    VALUES (v_tenant_id, v_prod2, 'WATCH-SLV-01', '1251', '{"رنگ": "نقره‌ای", "بند": "سیلیکونی"}'::jsonb, 42000000, 36500000, 300)
     RETURNING id INTO v_var2;
 
     INSERT INTO stock_balances (variant_id, tenant_id, physical_qty, avg_unit_cost) VALUES
@@ -378,7 +440,63 @@ BEGIN
 END;
 $$;
 
--- Atomic RPC 3: Finalize Sale (Online, BNPL or POS)
+-- Atomic RPC 2B: Purchase Return (برگشت از خرید به تامین‌کننده)
+CREATE OR REPLACE FUNCTION record_purchase_return_atomic(
+    p_tenant_id UUID,
+    p_variant_id UUID,
+    p_qty INT,
+    p_note TEXT DEFAULT 'فاکتور برگشت از خرید'
+) RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+    v_curr_qty INT;
+    v_avg_cost BIGINT;
+    v_new_qty INT;
+    v_total_cost BIGINT;
+    v_ret_id UUID := gen_random_uuid();
+    v_journal_id UUID;
+    v_next_entry BIGINT;
+    v_acc_inv UUID;
+    v_acc_ap UUID;
+BEGIN
+    PERFORM ensure_rasa_accounts(p_tenant_id);
+
+    SELECT physical_qty, avg_unit_cost INTO v_curr_qty, v_avg_cost
+    FROM stock_balances WHERE tenant_id = p_tenant_id AND variant_id = p_variant_id FOR UPDATE;
+
+    IF NOT FOUND OR v_curr_qty < p_qty THEN
+        RAISE EXCEPTION 'موجودی انبار برای برگشت از خرید کافی نیست';
+    END IF;
+
+    v_new_qty := v_curr_qty - p_qty;
+    v_total_cost := p_qty * v_avg_cost;
+
+    UPDATE stock_balances SET physical_qty = v_new_qty, updated_at = NOW()
+    WHERE tenant_id = p_tenant_id AND variant_id = p_variant_id;
+
+    INSERT INTO inventory_cardex (tenant_id, variant_id, movement_type, qty_delta, unit_cost, balance_after, reference_type, reference_id, note)
+    VALUES (p_tenant_id, p_variant_id, 'PURCHASE_RETURN', -p_qty, v_avg_cost, v_new_qty, 'PURCHASE_RETURN', v_ret_id, p_note);
+
+    SELECT COALESCE(MAX(entry_number), 0) + 1 INTO v_next_entry FROM journal_entries WHERE tenant_id = p_tenant_id;
+    INSERT INTO journal_entries (tenant_id, entry_number, description, source_type, source_id)
+    VALUES (p_tenant_id, v_next_entry, p_note, 'PURCHASE_RETURN', v_ret_id) RETURNING id INTO v_journal_id;
+
+    SELECT id INTO v_acc_inv FROM chart_of_accounts WHERE tenant_id = p_tenant_id AND code = '1201';
+    SELECT id INTO v_acc_ap FROM chart_of_accounts WHERE tenant_id = p_tenant_id AND code = '2101';
+
+    IF v_total_cost > 0 THEN
+        INSERT INTO journal_lines (journal_id, account_id, debit, credit) VALUES
+            (v_journal_id, v_acc_ap, v_total_cost, 0),
+            (v_journal_id, v_acc_inv, 0, v_total_cost);
+    END IF;
+
+    RETURN jsonb_build_object('new_qty', v_new_qty, 'journal_id', v_journal_id);
+END;
+$$;
+
+-- Atomic RPC 3: Finalize Sale
 CREATE OR REPLACE FUNCTION finalize_sale_atomic(
     p_tenant_id UUID,
     p_channel TEXT,
@@ -506,6 +624,11 @@ BEGIN
         WHERE id = p_tenant_id;
     END IF;
 
+    IF p_customer_mobile IS NOT NULL AND length(trim(p_customer_mobile)) >= 10 THEN
+        INSERT INTO sms_logs (tenant_id, mobile, message, status)
+        VALUES (p_tenant_id, p_customer_mobile, 'سفارش #' || v_next_order_num || ' با موفقیت در سامانه ثبت شد.', 'SENT');
+    END IF;
+
     SELECT COALESCE(MAX(entry_number), 0) + 1 INTO v_next_entry FROM journal_entries WHERE tenant_id = p_tenant_id;
     INSERT INTO journal_entries (tenant_id, entry_number, description, source_type, source_id)
     VALUES (p_tenant_id, v_next_entry, 'سند فروش #' || v_next_order_num || ' (' || p_channel || ')', p_channel || '_ORDER', v_order_id)
@@ -545,7 +668,7 @@ BEGIN
 END;
 $$;
 
--- Atomic RPC 4: Sales Return (برگشت از فروش + بازگشت به کاردکس + سند حسابداری معکوس)
+-- Atomic RPC 4: Sales Return
 CREATE OR REPLACE FUNCTION process_sales_return_atomic(
     p_tenant_id UUID,
     p_order_id UUID

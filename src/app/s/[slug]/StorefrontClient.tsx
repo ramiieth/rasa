@@ -3,6 +3,11 @@
 import { useState } from "react";
 import { ShoppingCart, CheckCircle2, Trash2, Search, Plus, Minus, Truck } from "lucide-react";
 import { formatToman } from "@/lib/format";
+import {
+  SHIPPING_METHODS,
+  ShippingCarrierCode,
+  calculateShippingRials,
+} from "@/lib/shipping-calculator";
 
 export default function StorefrontClient({
   tenant,
@@ -12,14 +17,27 @@ export default function StorefrontClient({
   variants: any[];
 }) {
   const [cart, setCart] = useState<
-    Array<{ variant_id: string; title: string; price: number; qty: number; maxQty: number }>
+    Array<{
+      variant_id: string;
+      title: string;
+      price: number;
+      weightGrams: number;
+      qty: number;
+      maxQty: number;
+    }>
   >([]);
   const [query, setQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("همه");
+  const [shippingCarrier, setShippingCarrier] = useState<ShippingCarrierCode>("PISHTAZ");
   const [customerName, setCustomerName] = useState("");
   const [customerMobile, setCustomerMobile] = useState("");
+  const [receiverPostalCode, setReceiverPostalCode] = useState("");
+  const [receiverAddress, setReceiverAddress] = useState("");
   const [loading, setLoading] = useState(false);
-  const [doneOrder, setDoneOrder] = useState<number | null>(null);
+  const [doneOrder, setDoneOrder] = useState<{
+    orderNumber: number;
+    barcode?: string;
+  } | null>(null);
   const [error, setError] = useState("");
 
   function addToCart(v: any) {
@@ -40,6 +58,7 @@ export default function StorefrontClient({
           variant_id: v.id,
           title: prod?.title || v.sku,
           price: Number(v.retail_price),
+          weightGrams: Number(v.weight_grams || 500),
           qty: 1,
           maxQty,
         },
@@ -62,7 +81,9 @@ export default function StorefrontClient({
   }
 
   const subtotal = cart.reduce((s, i) => s + i.price * i.qty, 0);
-  const shippingRials = cart.length > 0 ? 450000 : 0; // ۴۵ هزار تومان
+  const totalQty = cart.reduce((s, i) => s + i.qty, 0);
+  const totalWeightGrams = cart.reduce((s, i) => s + i.weightGrams * i.qty, 0);
+  const shippingRials = calculateShippingRials(shippingCarrier, totalWeightGrams, totalQty);
   const taxRials = Math.round(subtotal * 0.1);
   const grandTotal = subtotal + shippingRials + taxRials;
 
@@ -81,7 +102,10 @@ export default function StorefrontClient({
           paymentMethod: "ONLINE_GATEWAY",
           customerName: customerName || "خریدار اینترنتی",
           customerMobile,
-          shippingCostToman: 45000,
+          shippingCarrier,
+          receiverPostalCode,
+          receiverAddress,
+          shippingCostRials: shippingRials,
           items: cart.map((i) => ({ variant_id: i.variant_id, qty: i.qty })),
         }),
       });
@@ -91,7 +115,10 @@ export default function StorefrontClient({
         setLoading(false);
         return;
       }
-      setDoneOrder(json.order.order_number);
+      setDoneOrder({
+        orderNumber: json.order.order_number,
+        barcode: json.order.tracking_barcode,
+      });
       setCart([]);
     } catch {
       setError("خطا در ارتباط با سرور");
@@ -127,7 +154,9 @@ export default function StorefrontClient({
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 sm:px-6 py-3.5">
           <div>
             <h1 className="text-lg sm:text-xl font-extrabold text-slate-900">{tenant.name}</h1>
-            <p className="text-[11px] text-slate-500">فروشگاه آنلاین متصل به انبار و حسابداری رَسا</p>
+            <p className="text-[11px] text-slate-500">
+              فروشگاه آنلاین متصل به انبار، پیشخوان پستی و حسابداری رَسا
+            </p>
           </div>
           <div className="flex items-center gap-3 flex-1 max-w-md">
             <div className="relative flex-1">
@@ -142,7 +171,7 @@ export default function StorefrontClient({
             </div>
             <div className="flex items-center gap-2 rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-bold text-white shrink-0">
               <ShoppingCart className="h-4 w-4" />
-              <span>{cart.reduce((s, i) => s + i.qty, 0)}</span>
+              <span>{totalQty}</span>
             </div>
           </div>
         </div>
@@ -204,7 +233,9 @@ export default function StorefrontClient({
                       <h2 className="font-bold text-sm mt-1 text-slate-900 line-clamp-2">
                         {prod?.title}
                       </h2>
-                      <div className="text-[11px] text-slate-400 font-mono mt-1">{v.sku}</div>
+                      <div className="text-[11px] text-slate-400 font-mono mt-1">
+                        {v.sku} • {v.weight_grams || 500} گرم
+                      </div>
                     </div>
                   </div>
                   <div className="px-4 pb-4 flex items-center justify-between gap-2">
@@ -216,7 +247,7 @@ export default function StorefrontClient({
                       onClick={() => addToCart(v)}
                       className="rounded-xl bg-indigo-600 px-3 py-2 text-xs font-bold text-white hover:bg-indigo-700 disabled:bg-slate-300 transition cursor-pointer"
                     >
-                      {qty > 0 ? "خرید" : "اتمام"}
+                      {qty > 0 ? "افزودن" : "اتمام"}
                     </button>
                   </div>
                 </div>
@@ -226,21 +257,26 @@ export default function StorefrontClient({
 
           <aside className="lg:col-span-4 rounded-3xl border border-slate-200 bg-white p-5 space-y-4 shadow-sm sticky top-20">
             <h3 className="font-extrabold text-sm border-b border-slate-100 pb-3">
-              سبد خرید و تسویه تستی
+              سبد خرید، انتخاب نوع پست و تسویه
             </h3>
 
             {doneOrder && (
-              <div className="rounded-2xl bg-emerald-50 border border-emerald-200 p-3.5 text-xs font-semibold text-emerald-800 flex items-start gap-2">
-                <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" />
-                <span>
-                  سفارش #{doneOrder} با موفقیت ثبت شد، موجودی انبار کسر و سند حسابداری صادر گردید!
-                </span>
+              <div className="rounded-2xl bg-emerald-50 border border-emerald-200 p-3.5 text-xs font-semibold text-emerald-800 space-y-1.5">
+                <div className="flex items-center gap-2 font-extrabold">
+                  <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" />
+                  سفارش #{doneOrder.orderNumber} ثبت و از انبار کسر شد!
+                </div>
+                {doneOrder.barcode && (
+                  <div className="rounded-lg bg-white px-2.5 py-1.5 font-mono text-[11px] text-slate-700 border border-emerald-200">
+                    بارکد رهگیری پستی: <strong>{doneOrder.barcode}</strong>
+                  </div>
+                )}
               </div>
             )}
 
-            <div className="space-y-2 max-h-60 overflow-y-auto">
+            <div className="space-y-2 max-h-52 overflow-y-auto">
               {cart.length === 0 ? (
-                <div className="text-xs text-slate-400 py-6 text-center">سبد خرید خالی است</div>
+                <div className="text-xs text-slate-400 py-5 text-center">سبد خرید خالی است</div>
               ) : (
                 cart.map((item) => (
                   <div
@@ -280,34 +316,89 @@ export default function StorefrontClient({
             </div>
 
             <form onSubmit={handleTestCheckout} className="space-y-3 border-t border-slate-100 pt-3">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 mb-1.5">
+                  روش ارسال مرسوله (محاسبه هوشمند بر اساس وزن و حجم)
+                </label>
+                <div className="space-y-1.5">
+                  {SHIPPING_METHODS.map((m) => {
+                    const active = shippingCarrier === m.code;
+                    const rate = calculateShippingRials(m.code, totalWeightGrams, totalQty || 1);
+                    return (
+                      <button
+                        key={m.code}
+                        type="button"
+                        onClick={() => setShippingCarrier(m.code)}
+                        className={`w-full text-right rounded-xl border px-3 py-2 text-xs transition cursor-pointer flex items-center justify-between ${
+                          active
+                            ? "border-indigo-600 bg-indigo-50/70 text-indigo-900 font-bold"
+                            : "border-slate-200 text-slate-700 hover:bg-slate-50"
+                        }`}
+                      >
+                        <div>
+                          <div>{m.title}</div>
+                          <div className="text-[10px] text-slate-500 font-normal">
+                            {m.estDays} — {m.subtitle}
+                          </div>
+                        </div>
+                        <span className="font-bold text-indigo-700 shrink-0 mr-2">
+                          {m.isPostPaid ? "پس‌کرایه" : formatToman(rate)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               <input
                 type="text"
                 required
-                placeholder="نام و نام خانوادگی خریدار"
+                placeholder="نام و نام خانوادگی گیرنده"
                 value={customerName}
                 onChange={(e) => setCustomerName(e.target.value)}
-                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-xs focus:border-indigo-500 focus:outline-none"
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs focus:border-indigo-500 focus:outline-none"
               />
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  type="tel"
+                  required
+                  dir="ltr"
+                  placeholder="09123456789"
+                  value={customerMobile}
+                  onChange={(e) => setCustomerMobile(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs text-left"
+                />
+                <input
+                  type="text"
+                  required
+                  dir="ltr"
+                  placeholder="کد پستی ۱۰ رقمی"
+                  value={receiverPostalCode}
+                  onChange={(e) => setReceiverPostalCode(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs text-left font-mono"
+                />
+              </div>
               <input
-                type="tel"
+                type="text"
                 required
-                dir="ltr"
-                placeholder="09123456789"
-                value={customerMobile}
-                onChange={(e) => setCustomerMobile(e.target.value)}
-                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-xs text-left focus:border-indigo-500 focus:outline-none"
+                placeholder="آدرس دقیق پستی گیرنده (استان، شهر، خیابان، پلاک)"
+                value={receiverAddress}
+                onChange={(e) => setReceiverAddress(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs"
               />
 
               <div className="rounded-xl bg-slate-50 p-3 space-y-1.5 text-xs text-slate-600">
                 <div className="flex justify-between">
-                  <span>جمع اقلام:</span>
+                  <span>جمع اقلام ({totalWeightGrams} گرم):</span>
                   <span>{formatToman(subtotal)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="flex items-center gap-1">
-                    <Truck className="h-3.5 w-3.5" /> پست پیشتاز:
+                    <Truck className="h-3.5 w-3.5" /> هزینه ارسال:
                   </span>
-                  <span>{formatToman(shippingRials)}</span>
+                  <span>
+                    {shippingCarrier === "COD" ? "پرداخت در مقصد" : formatToman(shippingRials)}
+                  </span>
                 </div>
                 <div className="flex justify-between">
                   <span>مالیات (۱۰٪):</span>
@@ -326,7 +417,7 @@ export default function StorefrontClient({
                 disabled={cart.length === 0 || loading}
                 className="w-full rounded-xl bg-emerald-600 py-3 text-xs font-extrabold text-white hover:bg-emerald-700 disabled:opacity-50 transition cursor-pointer"
               >
-                {loading ? "در حال ثبت..." : "ثبت سفارش تستی (بدون درگاه)"}
+                {loading ? "در حال ثبت و صدور بارکد پستی..." : "ثبت سفارش و دریافت آنی بارکد پستی"}
               </button>
             </form>
           </aside>

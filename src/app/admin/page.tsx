@@ -20,11 +20,22 @@ import {
   AlertTriangle,
   Copy,
   Check,
+  Truck,
+  Printer,
+  Wallet,
+  RefreshCw,
 } from "lucide-react";
 import { formatToman, formatFaDate } from "@/lib/format";
+import { SHIPPING_METHODS } from "@/lib/shipping-calculator";
 
 interface OverviewData {
-  tenant: { id: string; slug: string; name: string; email: string };
+  tenant: {
+    id: string;
+    slug: string;
+    name: string;
+    email: string;
+    shippingWalletBalance: number;
+  };
   variants: any[];
   cardex: any[];
   orders: any[];
@@ -45,10 +56,14 @@ export default function AdminDashboardPage() {
   const router = useRouter();
   const [data, setData] = useState<OverviewData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<"products" | "cardex" | "purchase" | "journals" | "orders">("products");
+  const [tab, setTab] = useState<
+    "products" | "cardex" | "purchase" | "shipping" | "journals" | "orders"
+  >("products");
   const [searchQuery, setSearchQuery] = useState("");
   const [copiedTorob, setCopiedTorob] = useState(false);
   const [toast, setToast] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  const [selectedLabelOrder, setSelectedLabelOrder] = useState<any | null>(null);
+  const [topupAmountToman, setTopupAmountToman] = useState("500000");
 
   // Add product form
   const [title, setTitle] = useState("");
@@ -140,6 +155,43 @@ export default function AdminDashboardPage() {
     await loadData();
   }
 
+  async function handleWalletTopup(e: React.FormEvent) {
+    e.preventDefault();
+    const res = await fetch("/api/v1/admin/shipping", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "TOPUP_WALLET",
+        amountToman: Number(topupAmountToman),
+      }),
+    });
+    if (res.ok) {
+      setToast({ type: "ok", text: "کیف پول پیشخوان پستی با موفقیت شارژ شد." });
+      await loadData();
+    }
+  }
+
+  async function handleIssueBarcode(order: any) {
+    const res = await fetch("/api/v1/admin/shipping", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "ISSUE_BARCODE",
+        orderId: order.id,
+        carrier: order.shipping_carrier || "PISHTAZ",
+        orderNumber: order.order_number,
+      }),
+    });
+    const json = await res.json();
+    if (res.ok) {
+      setToast({
+        type: "ok",
+        text: `بارکد ۲۰ رقمی پستی (${json.barcode}) برای سفارش #${order.order_number} صادر شد.`,
+      });
+      await loadData();
+    }
+  }
+
   async function handleLogout() {
     await fetch("/api/v1/auth/logout", { method: "POST" });
     router.push("/");
@@ -179,6 +231,7 @@ export default function AdminDashboardPage() {
     { id: "products", label: "محصولات و موجودی", icon: Package },
     { id: "cardex", label: "کاردکس انبار", icon: ClipboardList },
     { id: "purchase", label: "ثبت فاکتور خرید", icon: PlusCircle },
+    { id: "shipping", label: "پیشخوان پستی و ارسال", icon: Truck },
     { id: "orders", label: "سفارش‌ها", icon: ShoppingBag },
     { id: "journals", label: "اسناد حسابداری دوبل", icon: BookOpen },
   ];
@@ -186,7 +239,7 @@ export default function AdminDashboardPage() {
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col lg:flex-row">
       {/* Desktop Sidebar */}
-      <aside className="lg:w-64 lg:shrink-0 border-b lg:border-b-0 lg:border-l border-slate-200 bg-white flex flex-col justify-between">
+      <aside className="no-print lg:w-64 lg:shrink-0 border-b lg:border-b-0 lg:border-l border-slate-200 bg-white flex flex-col justify-between">
         <div>
           <div className="p-5 border-b border-slate-100 flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-600 to-violet-600 text-white font-extrabold">
@@ -240,7 +293,7 @@ export default function AdminDashboardPage() {
 
       {/* Main Content */}
       <div className="flex-1 min-w-0">
-        <header className="border-b border-slate-200 bg-white px-4 sm:px-6 py-3.5 flex flex-wrap items-center justify-between gap-3">
+        <header className="no-print border-b border-slate-200 bg-white px-4 sm:px-6 py-3.5 flex flex-wrap items-center justify-between gap-3">
           <div className="text-sm font-extrabold text-slate-800">
             {navItems.find((i) => i.id === tab)?.label}
           </div>
@@ -279,7 +332,7 @@ export default function AdminDashboardPage() {
           </div>
         </header>
 
-        <main className="p-4 sm:p-6 space-y-6">
+        <main className="no-print p-4 sm:p-6 space-y-6">
           {/* KPI Cards */}
           <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
             <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs">
@@ -313,7 +366,9 @@ export default function AdminDashboardPage() {
               <div className="text-lg sm:text-xl font-extrabold text-emerald-800 mt-1.5">
                 {formatToman(pnl.grossProfit)}
               </div>
-              <div className="text-[11px] text-emerald-700/70 mt-1">تعداد کل سفارش: {pnl.orderCount}</div>
+              <div className="text-[11px] text-emerald-700/70 mt-1">
+                تعداد کل سفارش: {pnl.orderCount}
+              </div>
             </div>
           </div>
 
@@ -478,6 +533,139 @@ export default function AdminDashboardPage() {
             </div>
           )}
 
+          {tab === "shipping" && (
+            <div className="space-y-6">
+              {/* Postal Wallet + Active Carriers */}
+              <div className="grid lg:grid-cols-12 gap-6">
+                <form
+                  onSubmit={handleWalletTopup}
+                  className="lg:col-span-4 rounded-2xl border border-indigo-200 bg-gradient-to-br from-indigo-900 to-slate-900 text-white p-5 space-y-4 shadow-md"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-indigo-200 font-semibold flex items-center gap-1.5">
+                      <Wallet className="h-4 w-4 text-indigo-400" />
+                      کیف پول پیشخوان پستی رَسا
+                    </span>
+                    <span className="rounded-full bg-emerald-500/20 px-2.5 py-0.5 text-[10px] font-bold text-emerald-300">
+                      متصل به وب‌سرویس بارکد
+                    </span>
+                  </div>
+                  <div className="text-2xl font-extrabold">
+                    {formatToman(tenant.shippingWalletBalance)}
+                  </div>
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    هزینه صدور بارکد پستی (پیشتاز، سفارشی، تیپاکس و چاپار) به‌صورت خودکار از کیف پول کسر می‌شود.
+                  </p>
+                  <div className="flex gap-2 pt-1">
+                    <input
+                      type="number"
+                      min={50000}
+                      value={topupAmountToman}
+                      onChange={(e) => setTopupAmountToman(e.target.value)}
+                      className="flex-1 rounded-xl bg-white/10 border border-white/20 px-3 py-2 text-xs text-white focus:outline-none"
+                      placeholder="مبلغ شارژ (تومان)"
+                    />
+                    <button
+                      type="submit"
+                      className="rounded-xl bg-emerald-500 px-4 py-2 text-xs font-extrabold text-slate-950 hover:bg-emerald-400 cursor-pointer"
+                    >
+                      افزایش اعتبار
+                    </button>
+                  </div>
+                </form>
+
+                <div className="lg:col-span-8 rounded-2xl border border-slate-200 bg-white p-5 space-y-3 shadow-2xs">
+                  <div className="font-extrabold text-sm text-slate-900">
+                    روش‌های ارسال فعال و فرمول محاسبه وزنی/حجمی (انواع پست)
+                  </div>
+                  <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-3">
+                    {SHIPPING_METHODS.map((m) => (
+                      <div
+                        key={m.code}
+                        className="rounded-xl border border-slate-200 p-3 space-y-1 bg-slate-50/60"
+                      >
+                        <div className="font-bold text-xs text-slate-900">{m.title}</div>
+                        <div className="text-[11px] text-slate-500">{m.estDays}</div>
+                        <div className="text-xs font-extrabold text-indigo-700 pt-1">
+                          {m.isPostPaid
+                            ? "پس‌کرایه در مقصد"
+                            : `پایه: ${formatToman(m.baseRials)}`}
+                        </div>
+                        {!m.isPostPaid && (
+                          <div className="text-[10px] text-slate-400">
+                            +{formatToman(m.perKgRials)} به ازای هر کیلوگرم مازاد
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Postal Orders & Label Printing */}
+              <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-2xs">
+                <div className="border-b border-slate-200 px-4 py-3 font-bold text-sm">
+                  مدیریت مرسولات پستی، صدور بارکد ۲۰ رقمی و چاپ لیبل
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-right text-xs">
+                    <thead className="bg-slate-50 text-slate-500">
+                      <tr>
+                        <th className="p-3.5">سفارش</th>
+                        <th className="p-3.5">گیرنده / موبایل</th>
+                        <th className="p-3.5">نوع پست</th>
+                        <th className="p-3.5">وزن / کرایه</th>
+                        <th className="p-3.5">بارکد رهگیری ۲۰ رقمی</th>
+                        <th className="p-3.5">عملیات پستی</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {orders.map((o) => (
+                        <tr key={o.id} className="hover:bg-slate-50">
+                          <td className="p-3.5 font-extrabold">#{o.order_number}</td>
+                          <td className="p-3.5">
+                            <div className="font-bold">{o.customer_name}</div>
+                            <div className="text-[11px] text-slate-400 font-mono">
+                              {o.customer_mobile || "—"}
+                            </div>
+                          </td>
+                          <td className="p-3.5">
+                            <span className="rounded-lg bg-indigo-50 px-2.5 py-1 font-bold text-indigo-700">
+                              {o.shipping_carrier || "PISHTAZ"}
+                            </span>
+                          </td>
+                          <td className="p-3.5">
+                            <div>{o.total_weight_grams || 500} گرم</div>
+                            <div className="text-slate-500">{formatToman(o.shipping_cost)}</div>
+                          </td>
+                          <td className="p-3.5 font-mono text-slate-700">
+                            {o.tracking_barcode || "صادر نشده"}
+                          </td>
+                          <td className="p-3.5 flex items-center gap-2">
+                            <button
+                              onClick={() => handleIssueBarcode(o)}
+                              className="flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                            >
+                              <RefreshCw className="h-3 w-3" />
+                              صدور بارکد
+                            </button>
+                            <button
+                              onClick={() => setSelectedLabelOrder(o)}
+                              className="flex items-center gap-1 rounded-lg bg-slate-900 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-indigo-600 cursor-pointer"
+                            >
+                              <Printer className="h-3 w-3" />
+                              چاپ لیبل پستی
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
           {tab === "cardex" && (
             <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-2xs">
               <div className="border-b border-slate-200 px-4 py-3 font-bold text-sm">
@@ -608,7 +796,7 @@ export default function AdminDashboardPage() {
                     <tr>
                       <th className="p-3.5">شماره سفارش</th>
                       <th className="p-3.5">کانال</th>
-                      <th className="p-3.5">روش پرداخت</th>
+                      <th className="p-3.5">روش ارسال / پرداخت</th>
                       <th className="p-3.5">مشتری</th>
                       <th className="p-3.5">جمع کل</th>
                       <th className="p-3.5">بهای تمام‌شده (COGS)</th>
@@ -630,7 +818,9 @@ export default function AdminDashboardPage() {
                             {o.channel === "ONLINE" ? "آنلاین" : "حضوری POS"}
                           </span>
                         </td>
-                        <td className="p-3.5 font-mono text-slate-600">{o.payment_method}</td>
+                        <td className="p-3.5 font-mono text-slate-600">
+                          {o.shipping_carrier || o.payment_method}
+                        </td>
                         <td className="p-3.5">{o.customer_name}</td>
                         <td className="p-3.5 font-extrabold text-slate-900">
                           {formatToman(o.total_amount)}
@@ -650,9 +840,15 @@ export default function AdminDashboardPage() {
               {journals.map((j) => {
                 const lines = j.journal_lines || [];
                 const totalDebit = lines.reduce((s: number, l: any) => s + Number(l.debit || 0), 0);
-                const totalCredit = lines.reduce((s: number, l: any) => s + Number(l.credit || 0), 0);
+                const totalCredit = lines.reduce(
+                  (s: number, l: any) => s + Number(l.credit || 0),
+                  0
+                );
                 return (
-                  <div key={j.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs">
+                  <div
+                    key={j.id}
+                    className="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs"
+                  >
                     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3 mb-3 text-xs">
                       <span className="font-extrabold text-slate-900">
                         سند شماره #{j.entry_number} — {j.description}
@@ -706,6 +902,70 @@ export default function AdminDashboardPage() {
           )}
         </main>
       </div>
+
+      {/* Printable Postal Label Modal */}
+      {selectedLabelOrder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 space-y-4 text-xs border-2 border-slate-900 shadow-2xl">
+            <div className="flex items-center justify-between border-b-2 border-slate-900 pb-3">
+              <div>
+                <div className="font-extrabold text-base">برچسب استاندارد مرسوله پستی</div>
+                <div className="text-slate-500">
+                  سرویس: {selectedLabelOrder.shipping_carrier || "PISHTAZ"}
+                </div>
+              </div>
+              <div className="text-left font-mono font-bold">
+                #{selectedLabelOrder.order_number}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-300 p-3 text-center space-y-1 bg-slate-50">
+              <div className="text-[10px] text-slate-500">بارکد ۲۰ رقمی شرکت ملی پست / حامل</div>
+              <div className="font-mono font-extrabold text-sm tracking-widest">
+                {selectedLabelOrder.tracking_barcode || "198450000000001001"}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 border-b border-slate-200 pb-3">
+              <div>
+                <div className="text-slate-400">فرستنده:</div>
+                <div className="font-bold">{tenant.name}</div>
+              </div>
+              <div>
+                <div className="text-slate-400">وزن و کرایه حمل:</div>
+                <div className="font-bold">
+                  {selectedLabelOrder.total_weight_grams || 500} گرم —{" "}
+                  {formatToman(selectedLabelOrder.shipping_cost)}
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <div className="text-slate-400">گیرنده:</div>
+              <div className="font-extrabold text-sm">{selectedLabelOrder.customer_name}</div>
+              <div>تلفن: {selectedLabelOrder.customer_mobile || "—"}</div>
+              <div>کد پستی: {selectedLabelOrder.receiver_postal_code || "—"}</div>
+              <div>آدرس: {selectedLabelOrder.receiver_address || "ثبت در پرونده سفارش"}</div>
+            </div>
+
+            <div className="no-print flex gap-2 pt-3">
+              <button
+                onClick={() => window.print()}
+                className="flex-1 flex items-center justify-center gap-1.5 rounded-xl bg-slate-900 py-2.5 text-white font-bold cursor-pointer"
+              >
+                <Printer className="h-4 w-4" />
+                چاپ لیبل پستی
+              </button>
+              <button
+                onClick={() => setSelectedLabelOrder(null)}
+                className="flex-1 rounded-xl border border-slate-200 py-2.5 font-bold cursor-pointer"
+              >
+                بستن
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

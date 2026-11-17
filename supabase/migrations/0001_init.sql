@@ -1,15 +1,16 @@
--- Rasa (رَسا) MVP Database Schema, RLS, Atomic Inventory Cardex & Double-Entry Accounting RPCs
+-- Rasa (رَسا) MVP Database Schema, RLS, Atomic Inventory Cardex, Multi-Carrier Shipping & Double-Entry Accounting RPCs
 -- Run this once in Supabase Dashboard -> SQL Editor
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- 1. Tenants (فروشگاه‌ها)
 CREATE TABLE IF NOT EXISTS tenants (
-    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    slug        VARCHAR(63) UNIQUE NOT NULL,
-    name        VARCHAR(160) NOT NULL,
-    tax_rate    NUMERIC(5,2) NOT NULL DEFAULT 10.00,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    slug                    VARCHAR(63) UNIQUE NOT NULL,
+    name                    VARCHAR(160) NOT NULL,
+    tax_rate                NUMERIC(5,2) NOT NULL DEFAULT 10.00,
+    shipping_wallet_balance BIGINT NOT NULL DEFAULT 5000000, -- ۵۰۰ هزار تومان شارژ اولیه کیف پول پستی تستی
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- 2. Tenant Users (مدیران و صندوقداران)
@@ -106,23 +107,28 @@ CREATE TABLE IF NOT EXISTS journal_lines (
     CHECK ((debit > 0 AND credit = 0) OR (credit > 0 AND debit = 0))
 );
 
--- 6. Orders & Order Items (سفارش‌های آنلاین و حضوری)
+-- 6. Orders & Order Items (سفارش‌های آنلاین، حضوری و پیشخوان پستی)
 CREATE TABLE IF NOT EXISTS orders (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id       UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    order_number    BIGINT NOT NULL,
-    channel         VARCHAR(16) NOT NULL CHECK (channel IN ('ONLINE', 'POS')),
-    payment_method  VARCHAR(24) NOT NULL CHECK (payment_method IN ('ONLINE_GATEWAY', 'POS_CARD', 'CASH', 'CARD_TO_CARD')),
-    customer_name   VARCHAR(160) NOT NULL DEFAULT 'مشتری حضوری',
-    customer_mobile VARCHAR(20),
-    status          VARCHAR(24) NOT NULL DEFAULT 'COMPLETED',
-    subtotal        BIGINT NOT NULL DEFAULT 0,
-    tax_amount      BIGINT NOT NULL DEFAULT 0,
-    shipping_cost   BIGINT NOT NULL DEFAULT 0,
-    total_amount    BIGINT NOT NULL DEFAULT 0,
-    total_cogs      BIGINT NOT NULL DEFAULT 0,
-    idempotency_key VARCHAR(120) UNIQUE,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id            UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    order_number         BIGINT NOT NULL,
+    channel              VARCHAR(16) NOT NULL CHECK (channel IN ('ONLINE', 'POS')),
+    payment_method       VARCHAR(24) NOT NULL CHECK (payment_method IN ('ONLINE_GATEWAY', 'POS_CARD', 'CASH', 'CARD_TO_CARD')),
+    customer_name        VARCHAR(160) NOT NULL DEFAULT 'مشتری حضوری',
+    customer_mobile      VARCHAR(20),
+    shipping_carrier     VARCHAR(24) NOT NULL DEFAULT 'PISHTAZ',
+    tracking_barcode     VARCHAR(40),
+    receiver_postal_code VARCHAR(20),
+    receiver_address     TEXT,
+    total_weight_grams   INT NOT NULL DEFAULT 0,
+    status               VARCHAR(24) NOT NULL DEFAULT 'COMPLETED',
+    subtotal             BIGINT NOT NULL DEFAULT 0,
+    tax_amount           BIGINT NOT NULL DEFAULT 0,
+    shipping_cost        BIGINT NOT NULL DEFAULT 0,
+    total_amount         BIGINT NOT NULL DEFAULT 0,
+    total_cogs           BIGINT NOT NULL DEFAULT 0,
+    idempotency_key      VARCHAR(120) UNIQUE,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (tenant_id, order_number)
 );
 
@@ -135,6 +141,14 @@ CREATE TABLE IF NOT EXISTS order_items (
     unit_price BIGINT NOT NULL,
     unit_cost  BIGINT NOT NULL
 );
+
+-- Safe ALTERs in case table was already created earlier
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS shipping_wallet_balance BIGINT NOT NULL DEFAULT 5000000;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_carrier VARCHAR(24) NOT NULL DEFAULT 'PISHTAZ';
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS tracking_barcode VARCHAR(40);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS receiver_postal_code VARCHAR(20);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS receiver_address TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS total_weight_grams INT NOT NULL DEFAULT 0;
 
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_products_tenant ON products(tenant_id);
@@ -156,10 +170,21 @@ ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE order_items ENABLE ROW LEVEL SECURITY;
 
 -- Public read policy for active storefront products/variants
-CREATE POLICY public_read_tenants ON tenants FOR SELECT USING (true);
-CREATE POLICY public_read_products ON products FOR SELECT USING (is_active = true);
-CREATE POLICY public_read_variants ON product_variants FOR SELECT USING (true);
-CREATE POLICY public_read_stock ON stock_balances FOR SELECT USING (true);
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'public_read_tenants') THEN
+        CREATE POLICY public_read_tenants ON tenants FOR SELECT USING (true);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'public_read_products') THEN
+        CREATE POLICY public_read_products ON products FOR SELECT USING (is_active = true);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'public_read_variants') THEN
+        CREATE POLICY public_read_variants ON product_variants FOR SELECT USING (true);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'public_read_stock') THEN
+        CREATE POLICY public_read_stock ON stock_balances FOR SELECT USING (true);
+    END IF;
+END $$;
 
 -- Atomic RPC 1: Zero-Touch Tenant Provisioning + Sample Demo Data
 CREATE OR REPLACE FUNCTION provision_rasa_tenant(
@@ -179,13 +204,13 @@ DECLARE
     v_var2 UUID;
     v_purchase_ref UUID := gen_random_uuid();
 BEGIN
-    INSERT INTO tenants (name, slug) VALUES (p_name, lower(trim(p_slug)))
+    INSERT INTO tenants (name, slug, shipping_wallet_balance)
+    VALUES (p_name, lower(trim(p_slug)), 5000000)
     RETURNING id INTO v_tenant_id;
 
     INSERT INTO tenant_users (tenant_id, email, password_hash, full_name, role)
     VALUES (v_tenant_id, lower(trim(p_email)), p_password_hash, 'مدیر ' || p_name, 'OWNER');
 
-    -- Seed standard double-entry Chart of Accounts
     INSERT INTO chart_of_accounts (tenant_id, code, name, account_type) VALUES
         (v_tenant_id, '1101', 'بانک و درگاه پرداخت آنلاین', 'ASSET'),
         (v_tenant_id, '1102', 'صندوق نقدی فروشگاه', 'ASSET'),
@@ -196,7 +221,6 @@ BEGIN
         (v_tenant_id, '4102', 'درآمد هزینه ارسال و پست', 'REVENUE'),
         (v_tenant_id, '5101', 'بهای تمام‌شده کالای فروش‌رفته (COGS)', 'EXPENSE');
 
-    -- Seed 2 sample products so the test store is immediately usable
     INSERT INTO products (tenant_id, title, slug, category_name, image_url)
     VALUES (v_tenant_id, 'کتانی رانینگ رَسا مدل پرو', 'rasa-running-pro', 'کفش و پوشاک', 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=600')
     RETURNING id INTO v_prod1;
@@ -293,7 +317,7 @@ BEGIN
 END;
 $$;
 
--- Atomic RPC 3: Finalize Sale (Online or POS) + Stock Deduction + Cardex + Double-Entry Journal
+-- Atomic RPC 3: Finalize Sale (Online or POS) + Stock Deduction + Cardex + Postal Barcode + Double-Entry Journal
 CREATE OR REPLACE FUNCTION finalize_sale_atomic(
     p_tenant_id UUID,
     p_channel TEXT,
@@ -302,7 +326,11 @@ CREATE OR REPLACE FUNCTION finalize_sale_atomic(
     p_customer_mobile TEXT,
     p_shipping_cost BIGINT,
     p_items JSONB,
-    p_idempotency_key TEXT DEFAULT NULL
+    p_idempotency_key TEXT DEFAULT NULL,
+    p_shipping_carrier TEXT DEFAULT 'PISHTAZ',
+    p_receiver_postal_code TEXT DEFAULT NULL,
+    p_receiver_address TEXT DEFAULT NULL,
+    p_tracking_barcode TEXT DEFAULT NULL
 ) RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -318,10 +346,12 @@ DECLARE
     v_tax_amount BIGINT := 0;
     v_total_amount BIGINT := 0;
     v_total_cogs BIGINT := 0;
+    v_total_weight INT := 0;
     v_item JSONB;
     v_var_id UUID;
     v_qty INT;
     v_unit_price BIGINT;
+    v_weight INT;
     v_title TEXT;
     v_curr_qty INT;
     v_avg_cost BIGINT;
@@ -346,8 +376,16 @@ BEGIN
 
     v_movement_type := CASE WHEN p_channel = 'ONLINE' THEN 'ONLINE_OUT' ELSE 'POS_OUT' END;
 
-    INSERT INTO orders (tenant_id, order_number, channel, payment_method, customer_name, customer_mobile, shipping_cost, idempotency_key)
-    VALUES (p_tenant_id, v_next_order_num, p_channel, p_payment_method, COALESCE(NULLIF(p_customer_name, ''), 'مشتری حضوری'), p_customer_mobile, COALESCE(p_shipping_cost, 0), p_idempotency_key)
+    INSERT INTO orders (
+        tenant_id, order_number, channel, payment_method, customer_name, customer_mobile,
+        shipping_cost, idempotency_key, shipping_carrier, receiver_postal_code, receiver_address, tracking_barcode
+    )
+    VALUES (
+        p_tenant_id, v_next_order_num, p_channel, p_payment_method,
+        COALESCE(NULLIF(p_customer_name, ''), 'مشتری حضوری'), p_customer_mobile,
+        COALESCE(p_shipping_cost, 0), p_idempotency_key,
+        COALESCE(p_shipping_carrier, 'PISHTAZ'), p_receiver_postal_code, p_receiver_address, p_tracking_barcode
+    )
     RETURNING id INTO v_order_id;
 
     FOR v_item IN SELECT * FROM jsonb_array_elements(p_items)
@@ -355,7 +393,8 @@ BEGIN
         v_var_id := (v_item->>'variant_id')::UUID;
         v_qty := (v_item->>'qty')::INT;
 
-        SELECT pv.retail_price, p.title INTO v_unit_price, v_title
+        SELECT pv.retail_price, COALESCE(pv.weight_grams, 500), p.title
+        INTO v_unit_price, v_weight, v_title
         FROM product_variants pv
         JOIN products p ON p.id = pv.product_id
         WHERE pv.id = v_var_id AND pv.tenant_id = p_tenant_id;
@@ -387,14 +426,22 @@ BEGIN
 
         v_subtotal := v_subtotal + (v_qty * v_unit_price);
         v_total_cogs := v_total_cogs + (v_qty * v_avg_cost);
+        v_total_weight := v_total_weight + (v_qty * v_weight);
     END LOOP;
 
     v_tax_amount := ROUND(v_subtotal * (v_tax_rate / 100.0))::BIGINT;
     v_total_amount := v_subtotal + v_tax_amount + COALESCE(p_shipping_cost, 0);
 
     UPDATE orders
-    SET subtotal = v_subtotal, tax_amount = v_tax_amount, total_amount = v_total_amount, total_cogs = v_total_cogs
+    SET subtotal = v_subtotal, tax_amount = v_tax_amount, total_amount = v_total_amount,
+        total_cogs = v_total_cogs, total_weight_grams = v_total_weight
     WHERE id = v_order_id;
+
+    IF p_channel = 'ONLINE' AND COALESCE(p_shipping_cost, 0) > 0 THEN
+        UPDATE tenants
+        SET shipping_wallet_balance = GREATEST(0, shipping_wallet_balance - p_shipping_cost)
+        WHERE id = p_tenant_id;
+    END IF;
 
     -- Double-entry accounting posting
     SELECT COALESCE(MAX(entry_number), 0) + 1 INTO v_next_entry FROM journal_entries WHERE tenant_id = p_tenant_id;
@@ -427,6 +474,11 @@ BEGIN
             (v_journal_id, v_acc_inv, 0, v_total_cogs);
     END IF;
 
-    RETURN jsonb_build_object('order_id', v_order_id, 'order_number', v_next_order_num, 'total_amount', v_total_amount);
+    RETURN jsonb_build_object(
+        'order_id', v_order_id,
+        'order_number', v_next_order_num,
+        'total_amount', v_total_amount,
+        'tracking_barcode', p_tracking_barcode
+    );
 END;
 $$;

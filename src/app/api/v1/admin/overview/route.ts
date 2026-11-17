@@ -12,7 +12,12 @@ export async function GET() {
     const supabase = getSupabaseAdmin();
     const tenantId = session.tenantId;
 
-    const [variantsRes, cardexRes, ordersRes, journalRes] = await Promise.all([
+    const [tenantRes, variantsRes, cardexRes, ordersRes, journalRes] = await Promise.all([
+      supabase
+        .from("tenants")
+        .select("id, slug, name, shipping_wallet_balance")
+        .eq("id", tenantId)
+        .single(),
       supabase
         .from("product_variants")
         .select(
@@ -31,7 +36,7 @@ export async function GET() {
       supabase
         .from("orders")
         .select(
-          "id, order_number, channel, payment_method, customer_name, subtotal, tax_amount, shipping_cost, total_amount, total_cogs, created_at"
+          "id, order_number, channel, payment_method, customer_name, customer_mobile, shipping_carrier, tracking_barcode, receiver_postal_code, receiver_address, total_weight_grams, subtotal, tax_amount, shipping_cost, total_amount, total_cogs, created_at"
         )
         .eq("tenant_id", tenantId)
         .order("created_at", { ascending: false })
@@ -65,8 +70,9 @@ export async function GET() {
       tenant: {
         id: session.tenantId,
         slug: session.tenantSlug,
-        name: session.tenantName,
+        name: tenantRes.data?.name || session.tenantName,
         email: session.email,
+        shippingWalletBalance: Number(tenantRes.data?.shipping_wallet_balance ?? 5000000),
       },
       variants: variantsRes.data || [],
       cardex: cardexRes.data || [],

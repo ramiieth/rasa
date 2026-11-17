@@ -28,6 +28,13 @@ import {
   Copy,
   Check,
   Wallet,
+  Puzzle,
+  FileEdit,
+  Download,
+  Video,
+  Mail,
+  Bike,
+  Box,
 } from "lucide-react";
 import { formatToman, formatFaDate } from "@/lib/format";
 import { DashboardHome } from "@/components/admin/DashboardHome";
@@ -39,6 +46,7 @@ import {
 } from "@/components/admin/PostalLabelModal";
 import { RasaPostSection } from "@/components/admin/RasaPostSection";
 import { RasaSmsSection } from "@/components/admin/RasaSmsSection";
+import { ExtraAdminModules } from "@/components/admin/ExtraAdminModules";
 
 interface OverviewData {
   tenant: {
@@ -87,9 +95,12 @@ export default function AdminDashboardPage() {
   const [copiedTorob, setCopiedTorob] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
 
-  // Orders sub-tab (وبسایت vs حضوری / دایرکت)
+  // Orders filters matching Video 3 (سورنا ۵)
   const [orderChannelTab, setOrderChannelTab] = useState<"ONLINE" | "POS">("ONLINE");
+  const [orderStatusFilter, setOrderStatusFilter] = useState<string>("ALL");
   const [orderSearch, setOrderSearch] = useState("");
+  const [invoiceIdSearch, setInvoiceIdSearch] = useState("");
+  const [txIdSearch, setTxIdSearch] = useState("");
   const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
 
   // Print modals
@@ -176,7 +187,6 @@ export default function AdminDashboardPage() {
     loadData();
   }, [loadData]);
 
-  // Global F7 Shortcut
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "F7") {
@@ -455,6 +465,10 @@ export default function AdminDashboardPage() {
         ? o.channel === "ONLINE" || o.channel === "MANUAL_PARCEL"
         : o.channel === "POS";
     if (!matchChannel) return false;
+    if (orderStatusFilter === "SENT" && o.shipping_status === "PENDING_PACK") return false;
+    if (orderStatusFilter === "PAID" && o.status === "RETURNED") return false;
+    if (invoiceIdSearch && !String(o.order_number).includes(invoiceIdSearch.trim())) return false;
+    if (txIdSearch && !String(o.tracking_barcode || "").includes(txIdSearch.trim())) return false;
     const q = orderSearch.trim().toLowerCase();
     if (!q) return true;
     return (
@@ -464,9 +478,83 @@ export default function AdminDashboardPage() {
     );
   });
 
+  function renderPaymentBadge(o: any) {
+    if (o.payment_method === "BNPL") {
+      if (o.bnpl_provider === "TOROB_PAY") {
+        return (
+          <span className="inline-flex items-center gap-1 rounded-full bg-rose-500 px-3 py-0.5 text-[11px] font-bold text-white">
+            ● ترب پی
+          </span>
+        );
+      }
+      if (o.bnpl_provider === "DIGI_PAY") {
+        return (
+          <span className="inline-flex items-center gap-1 rounded-full bg-blue-600 px-3 py-0.5 text-[11px] font-bold text-white">
+            ● دیجی پی
+          </span>
+        );
+      }
+      if (o.bnpl_provider === "SHOPINO") {
+        return (
+          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500 px-3 py-0.5 text-[11px] font-bold text-white">
+            ● شاپینو
+          </span>
+        );
+      }
+      return (
+        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500 px-3 py-0.5 text-[11px] font-bold text-white">
+          ● اسنپ پی
+        </span>
+      );
+    }
+    if (o.channel === "POS") {
+      return (
+        <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 border border-slate-200 px-3 py-0.5 text-[11px] font-bold text-slate-700">
+          <span className="text-emerald-600">●</span> حضوری
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 border border-slate-200 px-3 py-0.5 text-[11px] font-bold text-slate-700">
+        <span className="text-emerald-600">●</span> سامان کیش(سپ)
+      </span>
+    );
+  }
+
+  function renderCarrierBadge(o: any) {
+    if (o.channel === "POS") return <span className="text-slate-400">—</span>;
+    const carrier = o.shipping_carrier || "PISHTAZ";
+    if (carrier === "COURIER") {
+      return (
+        <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 border border-slate-200 px-2.5 py-0.5 text-[11px] font-semibold text-slate-700">
+          <Bike className="h-3.5 w-3.5 text-emerald-600" /> پیک
+        </span>
+      );
+    }
+    if (carrier === "TIPAX" || carrier === "COD") {
+      return (
+        <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 border border-slate-200 px-2.5 py-0.5 text-[11px] font-semibold text-slate-700">
+          <Box className="h-3.5 w-3.5 text-amber-700" /> تیپاکس(پسکرایه)
+        </span>
+      );
+    }
+    if (carrier === "MAHEX") {
+      return (
+        <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 border border-slate-200 px-2.5 py-0.5 text-[11px] font-semibold text-slate-700">
+          <Box className="h-3.5 w-3.5 text-indigo-600" /> ماهکس
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 border border-slate-200 px-2.5 py-0.5 text-[11px] font-semibold text-slate-700">
+        <Mail className="h-3.5 w-3.5 text-slate-600" /> پست
+      </span>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col lg:flex-row">
-      {/* Dark Accordion Sidebar (matching video 1 & 2) */}
+      {/* Dark Accordion Sidebar (matching Video 1, 2 & 3) */}
       <aside className="no-print lg:w-64 lg:shrink-0 bg-slate-900 text-slate-200 flex flex-col justify-between">
         <div>
           <div className="p-4 border-b border-slate-800 flex items-center justify-between">
@@ -484,7 +572,7 @@ export default function AdminDashboardPage() {
           <nav className="p-2.5 space-y-1 text-xs font-bold">
             <button
               onClick={() => setActiveTab("dashboard")}
-              className={`w-full flex items-center gap-2.5 rounded-xl px-3 py-2.5 transition cursor-pointer ${
+              className={`w-full flex items-center gap-2.5 rounded-xl px-3 py-2 transition cursor-pointer ${
                 activeTab === "dashboard" ? "bg-indigo-600 text-white" : "hover:bg-slate-800"
               }`}
             >
@@ -493,18 +581,18 @@ export default function AdminDashboardPage() {
 
             <button
               onClick={() => setActiveTab("products")}
-              className={`w-full flex items-center gap-2.5 rounded-xl px-3 py-2.5 transition cursor-pointer ${
+              className={`w-full flex items-center gap-2.5 rounded-xl px-3 py-2 transition cursor-pointer ${
                 activeTab === "products" ? "bg-indigo-600 text-white" : "hover:bg-slate-800"
               }`}
             >
-              <Package className="h-4 w-4" /> مدیریت محصولات و کاردکس
+              <Package className="h-4 w-4" /> مدیریت محصولات
             </button>
 
             {/* Accounting Accordion */}
             <div>
               <button
                 onClick={() => setOpenMenu(openMenu === "accounting" ? "" : "accounting")}
-                className="w-full flex items-center justify-between rounded-xl px-3 py-2.5 hover:bg-slate-800 cursor-pointer"
+                className="w-full flex items-center justify-between rounded-xl px-3 py-2 hover:bg-slate-800 cursor-pointer"
               >
                 <span className="flex items-center gap-2.5">
                   <BookOpen className="h-4 w-4" /> حسابداری
@@ -557,7 +645,7 @@ export default function AdminDashboardPage() {
                       activeTab === "journals" ? "bg-slate-800 text-white" : "hover:text-white"
                     }`}
                   >
-                    اسناد حسابداری و سود و زیان
+                    صورت سود و زیان / گزارشات
                   </button>
                 </div>
               )}
@@ -567,7 +655,7 @@ export default function AdminDashboardPage() {
             <div>
               <button
                 onClick={() => setOpenMenu(openMenu === "post" ? "" : "post")}
-                className="w-full flex items-center justify-between rounded-xl px-3 py-2.5 hover:bg-slate-800 cursor-pointer"
+                className="w-full flex items-center justify-between rounded-xl px-3 py-2 hover:bg-slate-800 cursor-pointer"
               >
                 <span className="flex items-center gap-2.5">
                   <Truck className="h-4 w-4" /> رَسا پست (ماهکس و پست)
@@ -618,7 +706,7 @@ export default function AdminDashboardPage() {
 
             <button
               onClick={() => setActiveTab("sms")}
-              className={`w-full flex items-center gap-2.5 rounded-xl px-3 py-2.5 transition cursor-pointer ${
+              className={`w-full flex items-center gap-2.5 rounded-xl px-3 py-2 transition cursor-pointer ${
                 activeTab === "sms" ? "bg-indigo-600 text-white" : "hover:bg-slate-800"
               }`}
             >
@@ -626,30 +714,66 @@ export default function AdminDashboardPage() {
             </button>
 
             <button
-              onClick={() => setActiveTab("treasury")}
-              className={`w-full flex items-center gap-2.5 rounded-xl px-3 py-2.5 transition cursor-pointer ${
-                activeTab === "treasury" ? "bg-indigo-600 text-white" : "hover:bg-slate-800"
-              }`}
-            >
-              <Landmark className="h-4 w-4" /> خزانه‌داری، چک و هزینه
-            </button>
-
-            <button
               onClick={() => setActiveTab("customers")}
-              className={`w-full flex items-center gap-2.5 rounded-xl px-3 py-2.5 transition cursor-pointer ${
+              className={`w-full flex items-center gap-2.5 rounded-xl px-3 py-2 transition cursor-pointer ${
                 activeTab === "customers" ? "bg-indigo-600 text-white" : "hover:bg-slate-800"
               }`}
             >
-              <Users className="h-4 w-4" /> اشخاص و مشتریان
+              <Users className="h-4 w-4" /> اشخاص
+            </button>
+
+            <button
+              onClick={() => setActiveTab("treasury")}
+              className={`w-full flex items-center gap-2.5 rounded-xl px-3 py-2 transition cursor-pointer ${
+                activeTab === "treasury" ? "bg-indigo-600 text-white" : "hover:bg-slate-800"
+              }`}
+            >
+              <Landmark className="h-4 w-4" /> مدیریت پرداخت
+            </button>
+
+            <button
+              onClick={() => setActiveTab("blog")}
+              className={`w-full flex items-center gap-2.5 rounded-xl px-3 py-2 transition cursor-pointer ${
+                activeTab === "blog" ? "bg-indigo-600 text-white" : "hover:bg-slate-800"
+              }`}
+            >
+              <FileEdit className="h-4 w-4" /> بلاگ
             </button>
 
             <button
               onClick={() => setActiveTab("settings")}
-              className={`w-full flex items-center gap-2.5 rounded-xl px-3 py-2.5 transition cursor-pointer ${
+              className={`w-full flex items-center gap-2.5 rounded-xl px-3 py-2 transition cursor-pointer ${
                 activeTab === "settings" ? "bg-indigo-600 text-white" : "hover:bg-slate-800"
               }`}
             >
-              <Settings className="h-4 w-4" /> تنظیمات فروشگاه
+              <Settings className="h-4 w-4" /> تنظیمات
+            </button>
+
+            <button
+              onClick={() => setActiveTab("plugins")}
+              className={`w-full flex items-center gap-2.5 rounded-xl px-3 py-2 transition cursor-pointer ${
+                activeTab === "plugins" ? "bg-indigo-600 text-white" : "hover:bg-slate-800"
+              }`}
+            >
+              <Puzzle className="h-4 w-4" /> افزونه‌ها و افزونه‌های من
+            </button>
+
+            <button
+              onClick={() => setActiveTab("tutorials")}
+              className={`w-full flex items-center gap-2.5 rounded-xl px-3 py-2 transition cursor-pointer ${
+                activeTab === "tutorials" ? "bg-indigo-600 text-white" : "hover:bg-slate-800"
+              }`}
+            >
+              <Video className="h-4 w-4" /> ویدیو آموزش پنل
+            </button>
+
+            <button
+              onClick={() => setActiveTab("drivers")}
+              className={`w-full flex items-center gap-2.5 rounded-xl px-3 py-2 transition cursor-pointer ${
+                activeTab === "drivers" ? "bg-indigo-600 text-white" : "hover:bg-slate-800"
+              }`}
+            >
+              <Download className="h-4 w-4" /> نرم‌افزار و درایورها
             </button>
           </nav>
         </div>
@@ -658,7 +782,7 @@ export default function AdminDashboardPage() {
           <Link
             href={`/s/${tenant.slug}`}
             target="_blank"
-            className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 py-2.5 font-bold text-white hover:bg-emerald-500 transition"
+            className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-rose-500 py-2 font-bold text-white hover:bg-rose-600 transition"
           >
             مشاهده وبسایت
             <ExternalLink className="h-3.5 w-3.5" />
@@ -671,7 +795,7 @@ export default function AdminDashboardPage() {
           </Link>
           <button
             onClick={handleLogout}
-            className="w-full flex items-center justify-center gap-1.5 rounded-xl border border-slate-700 py-2 text-slate-400 hover:text-white cursor-pointer"
+            className="w-full flex items-center justify-center gap-1.5 rounded-xl border border-slate-700 py-1.5 text-slate-400 hover:text-white cursor-pointer"
           >
             <LogOut className="h-3.5 w-3.5" /> خروج
           </button>
@@ -682,14 +806,14 @@ export default function AdminDashboardPage() {
       <div className="flex-1 min-w-0">
         <header className="no-print border-b border-slate-200 bg-white px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3 text-xs">
           <div className="flex items-center gap-3">
-            <button
-              onClick={() => setF7Open(true)}
-              className="flex items-center gap-1.5 rounded-xl bg-rose-600 px-3.5 py-2 font-bold text-white hover:bg-rose-700 cursor-pointer"
+            <Link
+              href={`/s/${tenant.slug}`}
+              target="_blank"
+              className="rounded-lg bg-rose-500 px-3.5 py-1.5 font-bold text-white hover:bg-rose-600"
             >
-              <PlusCircle className="h-4 w-4" />
-              افزودن فاکتور فروش (F7)
-            </button>
-            <span className="hidden md:inline text-slate-500 font-semibold">
+              مشاهده وبسایت
+            </Link>
+            <span className="hidden md:inline text-slate-600 font-bold">
               همه مبالغ به تومان می‌باشد
             </span>
           </div>
@@ -700,7 +824,7 @@ export default function AdminDashboardPage() {
             </span>
             <button
               onClick={() => copyTorobUrl(tenant.slug)}
-              className="flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 font-bold text-slate-700 hover:bg-slate-50 cursor-pointer"
+              className="flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-1.5 font-bold text-slate-700 hover:bg-slate-50 cursor-pointer"
             >
               <Rss className="h-4 w-4 text-rose-500" />
               {copiedTorob ? (
@@ -797,16 +921,23 @@ export default function AdminDashboardPage() {
             />
           )}
 
+          {(activeTab === "plugins" ||
+            activeTab === "blog" ||
+            activeTab === "drivers" ||
+            activeTab === "tutorials") && (
+            <ExtraAdminModules activeTab={activeTab as any} onNotify={notify} />
+          )}
+
           {activeTab === "orders" && (
             <div className="space-y-4">
-              {/* Sub-tabs: وبسایت vs حضوری / دایرکت */}
+              {/* Top Tabs: وبسایت vs حضوری / دایرکت (Exact layout from Video 3) */}
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex rounded-xl bg-white border border-slate-200 p-1 text-xs font-bold">
                   <button
                     onClick={() => setOrderChannelTab("ONLINE")}
-                    className={`rounded-lg px-4 py-2 cursor-pointer ${
+                    className={`rounded-lg px-5 py-2 cursor-pointer transition ${
                       orderChannelTab === "ONLINE"
-                        ? "bg-emerald-600 text-white"
+                        ? "bg-emerald-500 text-white"
                         : "text-slate-600"
                     }`}
                   >
@@ -814,9 +945,9 @@ export default function AdminDashboardPage() {
                   </button>
                   <button
                     onClick={() => setOrderChannelTab("POS")}
-                    className={`rounded-lg px-4 py-2 cursor-pointer ${
+                    className={`rounded-lg px-5 py-2 cursor-pointer transition ${
                       orderChannelTab === "POS"
-                        ? "bg-emerald-600 text-white"
+                        ? "bg-emerald-500 text-white"
                         : "text-slate-600"
                     }`}
                   >
@@ -824,48 +955,105 @@ export default function AdminDashboardPage() {
                   </button>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2 text-xs">
-                  <input
-                    type="text"
-                    placeholder="جستجوی مشتری / شماره فاکتور..."
-                    value={orderSearch}
-                    onChange={(e) => setOrderSearch(e.target.value)}
-                    className="rounded-xl border border-slate-300 bg-white px-3 py-2"
-                  />
-                  {selectedOrderIds.length > 0 && (
-                    <button
-                      onClick={() => handleBatchShippingStatus("HANDED_TO_CARRIER")}
-                      className="rounded-xl bg-indigo-600 px-3.5 py-2 font-bold text-white cursor-pointer"
-                    >
-                      تغییر وضعیت گروهی ({selectedOrderIds.length})
-                    </button>
-                  )}
-                </div>
+                <button
+                  onClick={() => setF7Open(true)}
+                  className="flex items-center gap-1.5 rounded-xl bg-emerald-500 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-600 cursor-pointer"
+                >
+                  <PlusCircle className="h-4 w-4" />
+                  افزودن فاکتور فروش
+                </button>
+              </div>
+
+              {/* Filter Bar matching Video 3 */}
+              <div className="grid sm:grid-cols-2 md:grid-cols-4 gap-2.5 rounded-2xl border border-slate-200 bg-white p-3.5 text-xs">
+                <select
+                  value={orderStatusFilter}
+                  onChange={(e) => setOrderStatusFilter(e.target.value)}
+                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 font-bold text-slate-700"
+                >
+                  <option value="ALL">همه وضعیت‌ها (ارسال شده / پرداخت شده)</option>
+                  <option value="SENT">● ارسال شده</option>
+                  <option value="PAID">● پرداخت شده</option>
+                </select>
+                <input
+                  type="text"
+                  placeholder="جستجوی مشتری..."
+                  value={orderSearch}
+                  onChange={(e) => setOrderSearch(e.target.value)}
+                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2"
+                />
+                <input
+                  type="text"
+                  placeholder="# شناسه فاکتور"
+                  value={invoiceIdSearch}
+                  onChange={(e) => setInvoiceIdSearch(e.target.value)}
+                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 font-mono"
+                />
+                <input
+                  type="text"
+                  placeholder="شناسه تراکنش / بارکد"
+                  value={txIdSearch}
+                  onChange={(e) => setTxIdSearch(e.target.value)}
+                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 font-mono"
+                />
+              </div>
+
+              {/* Group Actions Row matching Video 3 */}
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <button
+                  onClick={() => handleBatchShippingStatus("HANDED_TO_CARRIER")}
+                  className="rounded-xl border border-slate-300 bg-white px-3.5 py-2 font-bold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                >
+                  تغییر وضعیت گروهی ({selectedOrderIds.length})
+                </button>
+                <button
+                  onClick={() => {
+                    const targets = channelOrders.filter((o) =>
+                      selectedOrderIds.includes(o.id)
+                    );
+                    if (targets.length === 0) {
+                      return notify("err", "ابتدا چند فاکتور را تیک بزنید.");
+                    }
+                    setLabelPrintState({ orders: targets, mode: "A6_WITH_ITEMS" });
+                  }}
+                  className="rounded-xl border border-slate-300 bg-white px-3.5 py-2 font-bold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                >
+                  انتخاب پرینت / چاپ آدرس گیرنده
+                </button>
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
                 <div className="overflow-x-auto">
                   <table className="w-full text-right text-xs">
-                    <thead className="bg-slate-50 text-slate-500">
+                    <thead className="bg-slate-800 text-white">
                       <tr>
-                        <th className="p-3">انتخاب</th>
+                        <th className="p-3">ردیف</th>
+                        <th className="p-3">تغییر وضعیت</th>
                         <th className="p-3">شماره فاکتور</th>
                         <th className="p-3">تاریخ</th>
                         <th className="p-3">مشتری</th>
+                        <th className="p-3">تعداد کالا</th>
                         <th className="p-3">نوع پرداخت</th>
                         <th className="p-3">نحوه ارسال</th>
+                        <th className="p-3">وضعیت</th>
                         <th className="p-3">جمع کل</th>
                         <th className="p-3">تعداد پرینت</th>
                         <th className="p-3">فیش</th>
-                        <th className="p-3">کنترل فاکتور</th>
+                        <th className="p-3">کنترل</th>
                         <th className="p-3">فاکتور / مرجوعی</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {channelOrders.map((o) => {
+                      {channelOrders.map((o, idx) => {
                         const checked = selectedOrderIds.includes(o.id);
+                        const itemQtySum = (o.order_items || []).reduce(
+                          (s: number, it: any) => s + Number(it.qty || 1),
+                          0
+                        ) || 1;
+
                         return (
                           <tr key={o.id} className="hover:bg-slate-50">
+                            <td className="p-3 font-bold text-slate-500">{idx + 1}</td>
                             <td className="p-3">
                               <input
                                 type="checkbox"
@@ -875,32 +1063,25 @@ export default function AdminDashboardPage() {
                                     checked ? prev.filter((id) => id !== o.id) : [...prev, o.id]
                                   )
                                 }
-                                className="h-4 w-4 accent-indigo-600"
+                                className="h-4 w-4 accent-emerald-600"
                               />
                             </td>
-                            <td className="p-3 font-extrabold">#{o.order_number}</td>
+                            <td className="p-3 font-extrabold font-mono">#{o.order_number}</td>
                             <td className="p-3 text-slate-500">{formatFaDate(o.created_at)}</td>
                             <td className="p-3 font-bold">{o.customer_name}</td>
+                            <td className="p-3 font-bold text-center">{itemQtySum}</td>
+                            <td className="p-3">{renderPaymentBadge(o)}</td>
+                            <td className="p-3">{renderCarrierBadge(o)}</td>
                             <td className="p-3">
-                              {o.payment_method === "BNPL" ? (
-                                <span className="rounded-full bg-rose-600 px-2.5 py-0.5 text-[10px] font-bold text-white">
-                                  {o.bnpl_provider === "TOROB_PAY"
-                                    ? "ترب‌پی"
-                                    : o.bnpl_provider === "DIGI_PAY"
-                                    ? "دیجی‌پی"
-                                    : "اسنپ‌پی"}
-                                </span>
-                              ) : o.channel === "POS" ? (
-                                <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800">
-                                  حضوری ({o.payment_method})
-                                </span>
-                              ) : (
-                                <span className="rounded-full bg-slate-200 px-2.5 py-0.5 text-[10px] font-bold text-slate-800">
-                                  درگاه بانکی آنلاین
-                                </span>
-                              )}
+                              <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-bold text-slate-700">
+                                <span className="text-emerald-600">●</span>{" "}
+                                {o.status === "RETURNED"
+                                  ? "مرجوع شده"
+                                  : o.shipping_status === "PENDING_PACK"
+                                  ? "پرداخت شده"
+                                  : "ارسال شده"}
+                              </span>
                             </td>
-                            <td className="p-3">{o.shipping_carrier || "حضوری"}</td>
                             <td className="p-3 font-extrabold">{formatToman(o.total_amount)}</td>
                             <td className="p-3 text-center font-bold">{o.print_count || 0}</td>
                             <td className="p-3">

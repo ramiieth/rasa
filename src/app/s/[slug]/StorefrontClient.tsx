@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ShoppingCart, CheckCircle2, Trash2 } from "lucide-react";
+import { ShoppingCart, CheckCircle2, Trash2, Search, Plus, Minus, Truck } from "lucide-react";
 import { formatToman } from "@/lib/format";
 
 export default function StorefrontClient({
@@ -11,7 +11,11 @@ export default function StorefrontClient({
   tenant: { id: string; slug: string; name: string };
   variants: any[];
 }) {
-  const [cart, setCart] = useState<Array<{ variant_id: string; title: string; price: number; qty: number }>>([]);
+  const [cart, setCart] = useState<
+    Array<{ variant_id: string; title: string; price: number; qty: number; maxQty: number }>
+  >([]);
+  const [query, setQuery] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState("همه");
   const [customerName, setCustomerName] = useState("");
   const [customerMobile, setCustomerMobile] = useState("");
   const [loading, setLoading] = useState(false);
@@ -20,9 +24,14 @@ export default function StorefrontClient({
 
   function addToCart(v: any) {
     const prod = Array.isArray(v.products) ? v.products[0] : v.products;
+    const stock = Array.isArray(v.stock_balances) ? v.stock_balances[0] : v.stock_balances;
+    const maxQty = Number(stock?.physical_qty || 0);
+    if (maxQty <= 0) return;
+
     setCart((prev) => {
       const existing = prev.find((i) => i.variant_id === v.id);
       if (existing) {
+        if (existing.qty >= maxQty) return prev;
         return prev.map((i) => (i.variant_id === v.id ? { ...i, qty: i.qty + 1 } : i));
       }
       return [
@@ -32,12 +41,30 @@ export default function StorefrontClient({
           title: prod?.title || v.sku,
           price: Number(v.retail_price),
           qty: 1,
+          maxQty,
         },
       ];
     });
   }
 
+  function updateQty(variantId: string, delta: number) {
+    setCart((prev) =>
+      prev
+        .map((item) => {
+          if (item.variant_id !== variantId) return item;
+          const next = item.qty + delta;
+          if (next <= 0) return null;
+          if (next > item.maxQty) return item;
+          return { ...item, qty: next };
+        })
+        .filter(Boolean) as typeof cart
+    );
+  }
+
   const subtotal = cart.reduce((s, i) => s + i.price * i.qty, 0);
+  const shippingRials = cart.length > 0 ? 450000 : 0; // ۴۵ هزار تومان
+  const taxRials = Math.round(subtotal * 0.1);
+  const grandTotal = subtotal + shippingRials + taxRials;
 
   async function handleTestCheckout(e: React.FormEvent) {
     e.preventDefault();
@@ -73,139 +100,237 @@ export default function StorefrontClient({
     }
   }
 
+  const categories = [
+    "همه",
+    ...Array.from(
+      new Set(
+        variants.map((v) => {
+          const p = Array.isArray(v.products) ? v.products[0] : v.products;
+          return p?.category_name || "عمومی";
+        })
+      )
+    ),
+  ];
+
+  const filtered = variants.filter((v) => {
+    const prod = Array.isArray(v.products) ? v.products[0] : v.products;
+    const cat = prod?.category_name || "عمومی";
+    if (selectedCategory !== "همه" && cat !== selectedCategory) return false;
+    const q = query.trim().toLowerCase();
+    if (!q) return true;
+    return prod?.title?.toLowerCase().includes(q) || v.sku?.toLowerCase().includes(q);
+  });
+
   return (
     <div className="min-h-screen bg-slate-50">
-      <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
+      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur-md">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 sm:px-6 py-3.5">
           <div>
-            <h1 className="text-xl font-extrabold text-slate-900">{tenant.name}</h1>
-            <p className="text-xs text-slate-500">فروشگاه آنلاین قدرت‌گرفته از پلتفرم رَسا</p>
+            <h1 className="text-lg sm:text-xl font-extrabold text-slate-900">{tenant.name}</h1>
+            <p className="text-[11px] text-slate-500">فروشگاه آنلاین متصل به انبار و حسابداری رَسا</p>
           </div>
-          <div className="flex items-center gap-2 rounded-xl bg-indigo-50 px-3.5 py-2 text-xs font-bold text-indigo-700">
-            <ShoppingCart className="h-4 w-4" />
-            سبد خرید: {cart.reduce((s, i) => s + i.qty, 0)} کالا
+          <div className="flex items-center gap-3 flex-1 max-w-md">
+            <div className="relative flex-1">
+              <Search className="h-4 w-4 text-slate-400 absolute right-3 top-2.5" />
+              <input
+                type="text"
+                placeholder="جستجو در محصولات..."
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 pr-9 pl-3 py-2 text-xs focus:bg-white focus:border-indigo-500 focus:outline-none"
+              />
+            </div>
+            <div className="flex items-center gap-2 rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-bold text-white shrink-0">
+              <ShoppingCart className="h-4 w-4" />
+              <span>{cart.reduce((s, i) => s + i.qty, 0)}</span>
+            </div>
           </div>
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-4 py-8 grid lg:grid-cols-12 gap-6">
-        <div className="lg:col-span-8 grid sm:grid-cols-2 gap-4">
-          {variants.map((v) => {
-            const prod = Array.isArray(v.products) ? v.products[0] : v.products;
-            const stock = Array.isArray(v.stock_balances)
-              ? v.stock_balances[0]
-              : v.stock_balances;
-            const qty = Number(stock?.physical_qty || 0);
-
-            return (
-              <div
-                key={v.id}
-                className="rounded-2xl border border-slate-200 bg-white overflow-hidden flex flex-col justify-between"
-              >
-                <div>
-                  <img
-                    src={
-                      prod?.image_url ||
-                      "https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?w=600"
-                    }
-                    alt={prod?.title}
-                    className="h-44 w-full object-cover bg-slate-100"
-                  />
-                  <div className="p-4">
-                    <div className="text-[11px] text-indigo-600 font-semibold">
-                      {prod?.category_name}
-                    </div>
-                    <h2 className="font-bold text-sm mt-1">{prod?.title}</h2>
-                    <div className="text-xs text-slate-400 mt-1">کد کالا: {v.sku}</div>
-                  </div>
-                </div>
-                <div className="px-4 pb-4 flex items-center justify-between">
-                  <span className="font-extrabold text-sm text-slate-900">
-                    {formatToman(v.retail_price)}
-                  </span>
-                  <button
-                    disabled={qty <= 0}
-                    onClick={() => addToCart(v)}
-                    className="rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-bold text-white hover:bg-indigo-700 disabled:bg-slate-300 cursor-pointer"
-                  >
-                    {qty > 0 ? "افزودن به سبد" : "ناموجود"}
-                  </button>
-                </div>
-              </div>
-            );
-          })}
+      <main className="mx-auto max-w-7xl px-4 sm:px-6 py-8 space-y-6">
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {categories.map((cat) => (
+            <button
+              key={cat}
+              onClick={() => setSelectedCategory(cat)}
+              className={`rounded-xl px-4 py-2 text-xs font-bold whitespace-nowrap transition cursor-pointer ${
+                selectedCategory === cat
+                  ? "bg-slate-900 text-white"
+                  : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-100"
+              }`}
+            >
+              {cat}
+            </button>
+          ))}
         </div>
 
-        <aside className="lg:col-span-4 rounded-2xl border border-slate-200 bg-white p-5 h-fit space-y-4">
-          <h3 className="font-bold text-sm border-b border-slate-100 pb-2">سبد خرید و تسویه تستی</h3>
+        <div className="grid lg:grid-cols-12 gap-6 items-start">
+          <div className="lg:col-span-8 grid sm:grid-cols-2 md:grid-cols-3 gap-4">
+            {filtered.map((v) => {
+              const prod = Array.isArray(v.products) ? v.products[0] : v.products;
+              const stock = Array.isArray(v.stock_balances)
+                ? v.stock_balances[0]
+                : v.stock_balances;
+              const qty = Number(stock?.physical_qty || 0);
 
-          {doneOrder && (
-            <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-3 text-xs text-emerald-800 flex items-center gap-2">
-              <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" />
-              سفارش #{doneOrder} با موفقیت ثبت شد، موجودی انبار کسر و سند حسابداری صادر گردید!
-            </div>
-          )}
-
-          <div className="space-y-2">
-            {cart.length === 0 ? (
-              <div className="text-xs text-slate-400 py-4 text-center">سبد خرید خالی است</div>
-            ) : (
-              cart.map((item) => (
+              return (
                 <div
-                  key={item.variant_id}
-                  className="flex items-center justify-between text-xs bg-slate-50 rounded-xl p-2.5"
+                  key={v.id}
+                  className="group rounded-2xl border border-slate-200 bg-white overflow-hidden flex flex-col justify-between hover:shadow-md transition"
                 >
                   <div>
-                    <div className="font-semibold">{item.title}</div>
-                    <div className="text-slate-500">
-                      {item.qty} × {formatToman(item.price)}
+                    <div className="relative overflow-hidden bg-slate-100">
+                      <img
+                        src={
+                          prod?.image_url ||
+                          "https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?w=600"
+                        }
+                        alt={prod?.title}
+                        className="h-44 w-full object-cover group-hover:scale-105 transition duration-300"
+                      />
+                      <span
+                        className={`absolute top-2.5 right-2.5 rounded-full px-2.5 py-0.5 text-[10px] font-bold ${
+                          qty > 0 ? "bg-white/90 text-emerald-700" : "bg-rose-600 text-white"
+                        }`}
+                      >
+                        {qty > 0 ? `موجود (${qty})` : "ناموجود"}
+                      </span>
+                    </div>
+                    <div className="p-4">
+                      <div className="text-[11px] text-indigo-600 font-bold">
+                        {prod?.category_name}
+                      </div>
+                      <h2 className="font-bold text-sm mt-1 text-slate-900 line-clamp-2">
+                        {prod?.title}
+                      </h2>
+                      <div className="text-[11px] text-slate-400 font-mono mt-1">{v.sku}</div>
                     </div>
                   </div>
-                  <button
-                    onClick={() =>
-                      setCart((prev) => prev.filter((i) => i.variant_id !== item.variant_id))
-                    }
-                    className="text-rose-500 cursor-pointer"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
+                  <div className="px-4 pb-4 flex items-center justify-between gap-2">
+                    <span className="font-extrabold text-sm text-slate-900">
+                      {formatToman(v.retail_price)}
+                    </span>
+                    <button
+                      disabled={qty <= 0}
+                      onClick={() => addToCart(v)}
+                      className="rounded-xl bg-indigo-600 px-3 py-2 text-xs font-bold text-white hover:bg-indigo-700 disabled:bg-slate-300 transition cursor-pointer"
+                    >
+                      {qty > 0 ? "خرید" : "اتمام"}
+                    </button>
+                  </div>
                 </div>
-              ))
-            )}
+              );
+            })}
           </div>
 
-          <form onSubmit={handleTestCheckout} className="space-y-3 border-t border-slate-100 pt-3">
-            <input
-              type="text"
-              required
-              placeholder="نام و نام خانوادگی خریدار"
-              value={customerName}
-              onChange={(e) => setCustomerName(e.target.value)}
-              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs"
-            />
-            <input
-              type="tel"
-              required
-              dir="ltr"
-              placeholder="09123456789"
-              value={customerMobile}
-              onChange={(e) => setCustomerMobile(e.target.value)}
-              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs text-left"
-            />
-            <div className="text-xs flex justify-between font-bold">
-              <span>جمع اقلام (به‌علاوه پست ۴۵ هزار تومان):</span>
-              <span>{formatToman(subtotal)}</span>
+          <aside className="lg:col-span-4 rounded-3xl border border-slate-200 bg-white p-5 space-y-4 shadow-sm sticky top-20">
+            <h3 className="font-extrabold text-sm border-b border-slate-100 pb-3">
+              سبد خرید و تسویه تستی
+            </h3>
+
+            {doneOrder && (
+              <div className="rounded-2xl bg-emerald-50 border border-emerald-200 p-3.5 text-xs font-semibold text-emerald-800 flex items-start gap-2">
+                <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" />
+                <span>
+                  سفارش #{doneOrder} با موفقیت ثبت شد، موجودی انبار کسر و سند حسابداری صادر گردید!
+                </span>
+              </div>
+            )}
+
+            <div className="space-y-2 max-h-60 overflow-y-auto">
+              {cart.length === 0 ? (
+                <div className="text-xs text-slate-400 py-6 text-center">سبد خرید خالی است</div>
+              ) : (
+                cart.map((item) => (
+                  <div
+                    key={item.variant_id}
+                    className="flex items-center justify-between text-xs bg-slate-50 rounded-xl p-2.5 gap-2"
+                  >
+                    <div className="min-w-0">
+                      <div className="font-bold truncate">{item.title}</div>
+                      <div className="text-slate-500 mt-0.5">
+                        {formatToman(item.price * item.qty)}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={() => updateQty(item.variant_id, -1)}
+                        className="h-6 w-6 rounded-lg border border-slate-200 bg-white flex items-center justify-center cursor-pointer"
+                      >
+                        <Minus className="h-3 w-3" />
+                      </button>
+                      <span className="w-5 text-center font-bold">{item.qty}</span>
+                      <button
+                        onClick={() => updateQty(item.variant_id, 1)}
+                        className="h-6 w-6 rounded-lg border border-slate-200 bg-white flex items-center justify-center cursor-pointer"
+                      >
+                        <Plus className="h-3 w-3" />
+                      </button>
+                      <button
+                        onClick={() => updateQty(item.variant_id, -item.qty)}
+                        className="text-rose-500 mr-1 cursor-pointer"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
-            {error && <div className="text-xs text-rose-600">{error}</div>}
-            <button
-              type="submit"
-              disabled={cart.length === 0 || loading}
-              className="w-full rounded-xl bg-emerald-600 py-2.5 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-50 cursor-pointer"
-            >
-              {loading ? "در حال ثبت..." : "ثبت سفارش تستی (بدون درگاه)"}
-            </button>
-          </form>
-        </aside>
+
+            <form onSubmit={handleTestCheckout} className="space-y-3 border-t border-slate-100 pt-3">
+              <input
+                type="text"
+                required
+                placeholder="نام و نام خانوادگی خریدار"
+                value={customerName}
+                onChange={(e) => setCustomerName(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-xs focus:border-indigo-500 focus:outline-none"
+              />
+              <input
+                type="tel"
+                required
+                dir="ltr"
+                placeholder="09123456789"
+                value={customerMobile}
+                onChange={(e) => setCustomerMobile(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-xs text-left focus:border-indigo-500 focus:outline-none"
+              />
+
+              <div className="rounded-xl bg-slate-50 p-3 space-y-1.5 text-xs text-slate-600">
+                <div className="flex justify-between">
+                  <span>جمع اقلام:</span>
+                  <span>{formatToman(subtotal)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="flex items-center gap-1">
+                    <Truck className="h-3.5 w-3.5" /> پست پیشتاز:
+                  </span>
+                  <span>{formatToman(shippingRials)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>مالیات (۱۰٪):</span>
+                  <span>{formatToman(taxRials)}</span>
+                </div>
+                <div className="flex justify-between font-extrabold text-sm text-slate-900 pt-1 border-t border-slate-200">
+                  <span>مبلغ نهایی:</span>
+                  <span className="text-indigo-700">{formatToman(grandTotal)}</span>
+                </div>
+              </div>
+
+              {error && <div className="text-xs font-bold text-rose-600">{error}</div>}
+
+              <button
+                type="submit"
+                disabled={cart.length === 0 || loading}
+                className="w-full rounded-xl bg-emerald-600 py-3 text-xs font-extrabold text-white hover:bg-emerald-700 disabled:opacity-50 transition cursor-pointer"
+              >
+                {loading ? "در حال ثبت..." : "ثبت سفارش تستی (بدون درگاه)"}
+              </button>
+            </form>
+          </aside>
+        </div>
       </main>
     </div>
   );

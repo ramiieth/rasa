@@ -14,6 +14,12 @@ import {
   LogOut,
   ExternalLink,
   Rss,
+  Search,
+  TrendingUp,
+  CheckCircle2,
+  AlertTriangle,
+  Copy,
+  Check,
 } from "lucide-react";
 import { formatToman, formatFaDate } from "@/lib/format";
 
@@ -40,7 +46,9 @@ export default function AdminDashboardPage() {
   const [data, setData] = useState<OverviewData | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<"products" | "cardex" | "purchase" | "journals" | "orders">("products");
-  const [msg, setMsg] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [copiedTorob, setCopiedTorob] = useState(false);
+  const [toast, setToast] = useState<{ type: "ok" | "err"; text: string } | null>(null);
 
   // Add product form
   const [title, setTitle] = useState("");
@@ -78,7 +86,7 @@ export default function AdminDashboardPage() {
 
   async function handleAddProduct(e: React.FormEvent) {
     e.preventDefault();
-    setMsg("");
+    setToast(null);
     const res = await fetch("/api/v1/admin/products", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -94,7 +102,7 @@ export default function AdminDashboardPage() {
     });
     const json = await res.json();
     if (!res.ok) {
-      setMsg(json.error || "خطا در ثبت محصول");
+      setToast({ type: "err", text: json.error || "خطا در ثبت محصول" });
       return;
     }
     setTitle("");
@@ -102,13 +110,13 @@ export default function AdminDashboardPage() {
     setBarcode("");
     setRetailPriceToman("");
     setUnitCostToman("");
-    setMsg("محصول با موفقیت ثبت شد و موجودی اولیه در کاردکس نشست.");
+    setToast({ type: "ok", text: "محصول جدید ثبت شد و موجودی اولیه در کاردکس نشست." });
     await loadData();
   }
 
   async function handlePurchase(e: React.FormEvent) {
     e.preventDefault();
-    setMsg("");
+    setToast(null);
     const res = await fetch("/api/v1/admin/purchase", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -121,11 +129,14 @@ export default function AdminDashboardPage() {
     });
     const json = await res.json();
     if (!res.ok) {
-      setMsg(json.error || "خطا در ثبت خرید");
+      setToast({ type: "err", text: json.error || "خطا در ثبت خرید" });
       return;
     }
     setPurCostToman("");
-    setMsg("فاکتور خرید ثبت شد، میانگین موزون بروزرسانی و سند حسابداری صادر گردید.");
+    setToast({
+      type: "ok",
+      text: "فاکتور خرید ثبت شد؛ میانگین موزون انبار و سند حسابداری دوبل به‌روزرسانی شدند.",
+    });
     await loadData();
   }
 
@@ -134,164 +145,382 @@ export default function AdminDashboardPage() {
     router.push("/");
   }
 
+  function copyTorobUrl(slug: string) {
+    const url = `${window.location.origin}/api/v1/feeds/${slug}/torob`;
+    navigator.clipboard.writeText(url);
+    setCopiedTorob(true);
+    setTimeout(() => setCopiedTorob(false), 2000);
+  }
+
   if (loading || !data) {
     return (
-      <div className="min-h-screen flex items-center justify-center text-slate-600 text-sm">
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 text-slate-500 text-sm font-semibold">
         در حال بارگذاری پنل مدیریت رَسا...
       </div>
     );
   }
 
   const { tenant, variants, cardex, orders, journals, pnl } = data;
+  const marginPercent =
+    pnl.totalRevenue > 0 ? Math.round((pnl.grossProfit / pnl.totalRevenue) * 100) : 0;
+
+  const filteredVariants = variants.filter((v) => {
+    const prod = Array.isArray(v.products) ? v.products[0] : v.products;
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      prod?.title?.toLowerCase().includes(q) ||
+      v.sku?.toLowerCase().includes(q) ||
+      v.barcode?.toLowerCase().includes(q)
+    );
+  });
+
+  const navItems = [
+    { id: "products", label: "محصولات و موجودی", icon: Package },
+    { id: "cardex", label: "کاردکس انبار", icon: ClipboardList },
+    { id: "purchase", label: "ثبت فاکتور خرید", icon: PlusCircle },
+    { id: "orders", label: "سفارش‌ها", icon: ShoppingBag },
+    { id: "journals", label: "اسناد حسابداری دوبل", icon: BookOpen },
+  ];
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 py-3.5">
-          <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-600 text-white font-bold">
+    <div className="min-h-screen bg-slate-50 flex flex-col lg:flex-row">
+      {/* Desktop Sidebar */}
+      <aside className="lg:w-64 lg:shrink-0 border-b lg:border-b-0 lg:border-l border-slate-200 bg-white flex flex-col justify-between">
+        <div>
+          <div className="p-5 border-b border-slate-100 flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-600 to-violet-600 text-white font-extrabold">
               رَ
             </div>
-            <div>
-              <h1 className="font-extrabold text-base">{tenant.name}</h1>
-              <div className="text-xs text-slate-500">پنل مدیریت یکپارچه رَسا ({tenant.slug})</div>
+            <div className="min-w-0">
+              <h1 className="font-extrabold text-sm text-slate-900 truncate">{tenant.name}</h1>
+              <div className="text-[11px] text-slate-500 font-mono truncate">{tenant.slug}</div>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5 text-xs font-semibold">
+          <nav className="p-3 flex lg:flex-col gap-1.5 overflow-x-auto">
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              const active = tab === item.id;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => setTab(item.id as any)}
+                  className={`flex items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-xs font-bold whitespace-nowrap transition cursor-pointer ${
+                    active
+                      ? "bg-indigo-600 text-white shadow-sm shadow-indigo-600/20"
+                      : "text-slate-600 hover:bg-slate-100"
+                  }`}
+                >
+                  <Icon className="h-4 w-4 shrink-0" />
+                  {item.label}
+                </button>
+              );
+            })}
+          </nav>
+        </div>
+
+        <div className="hidden lg:block p-4 border-t border-slate-100 space-y-2">
+          <Link
+            href="/pos"
+            className="w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-600 py-2.5 text-xs font-bold text-white hover:bg-emerald-700 transition"
+          >
+            <MonitorSmartphone className="h-4 w-4" />
+            ورود به صندوق فروش (POS)
+          </Link>
+          <button
+            onClick={handleLogout}
+            className="w-full flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 cursor-pointer"
+          >
+            <LogOut className="h-3.5 w-3.5" />
+            خروج از حساب
+          </button>
+        </div>
+      </aside>
+
+      {/* Main Content */}
+      <div className="flex-1 min-w-0">
+        <header className="border-b border-slate-200 bg-white px-4 sm:px-6 py-3.5 flex flex-wrap items-center justify-between gap-3">
+          <div className="text-sm font-extrabold text-slate-800">
+            {navItems.find((i) => i.id === tab)?.label}
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs font-bold">
             <Link
               href="/pos"
-              className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-2 text-white hover:bg-emerald-700"
+              className="lg:hidden flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-2 text-white"
             >
               <MonitorSmartphone className="h-4 w-4" />
-              صندوق فروش حضوری (POS)
+              صندوق POS
             </Link>
             <Link
               href={`/s/${tenant.slug}`}
               target="_blank"
-              className="flex items-center gap-1.5 rounded-xl bg-indigo-50 px-3.5 py-2 text-indigo-700 hover:bg-indigo-100"
+              className="flex items-center gap-1.5 rounded-xl bg-indigo-50 px-3.5 py-2 text-indigo-700 hover:bg-indigo-100 transition"
             >
               <Store className="h-4 w-4" />
-              مشاهده ویترین سایت
+              ویترین فروشگاه
               <ExternalLink className="h-3.5 w-3.5" />
             </Link>
-            <Link
-              href={`/api/v1/feeds/${tenant.slug}/torob`}
-              target="_blank"
-              className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-700 hover:bg-slate-50"
+            <button
+              onClick={() => copyTorobUrl(tenant.slug)}
+              className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-700 hover:bg-slate-50 cursor-pointer"
             >
               <Rss className="h-4 w-4 text-rose-500" />
-              فید ترب
-            </Link>
-            <button
-              onClick={handleLogout}
-              className="flex items-center gap-1 rounded-xl border border-slate-200 px-3 py-2 text-slate-600 hover:bg-slate-100 cursor-pointer"
-            >
-              <LogOut className="h-4 w-4" />
-              خروج
+              {copiedTorob ? (
+                <span className="text-emerald-600 flex items-center gap-1">
+                  <Check className="h-3.5 w-3.5" /> کپی شد
+                </span>
+              ) : (
+                <span className="flex items-center gap-1">
+                  لینک فید ترب <Copy className="h-3 w-3 text-slate-400" />
+                </span>
+              )}
             </button>
           </div>
-        </div>
-      </header>
+        </header>
 
-      <main className="mx-auto max-w-7xl px-4 py-6 space-y-6">
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="rounded-2xl border border-slate-200 bg-white p-4">
-            <div className="text-xs text-slate-500">فروش آنلاین سایت</div>
-            <div className="text-lg font-extrabold text-indigo-700 mt-1">
-              {formatToman(pnl.onlineSales)}
+        <main className="p-4 sm:p-6 space-y-6">
+          {/* KPI Cards */}
+          <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs">
+              <div className="text-xs text-slate-500 font-medium">فروش آنلاین سایت</div>
+              <div className="text-lg sm:text-xl font-extrabold text-indigo-700 mt-1.5">
+                {formatToman(pnl.onlineSales)}
+              </div>
+              <div className="text-[11px] text-slate-400 mt-1">جمع کل سفارش‌های وب</div>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs">
+              <div className="text-xs text-slate-500 font-medium">فروش حضوری صندوق (POS)</div>
+              <div className="text-lg sm:text-xl font-extrabold text-emerald-700 mt-1.5">
+                {formatToman(pnl.posSales)}
+              </div>
+              <div className="text-[11px] text-slate-400 mt-1">کل فروش گیشه مغازه</div>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs">
+              <div className="text-xs text-slate-500 font-medium">بهای تمام‌شده (COGS)</div>
+              <div className="text-lg sm:text-xl font-extrabold text-slate-800 mt-1.5">
+                {formatToman(pnl.totalCogs)}
+              </div>
+              <div className="text-[11px] text-slate-400 mt-1">بر اساس میانگین موزون</div>
+            </div>
+            <div className="rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-white p-4 shadow-2xs">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-emerald-800 font-bold">سود ناخالص واقعی</span>
+                <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-bold text-emerald-800 flex items-center gap-0.5">
+                  <TrendingUp className="h-3 w-3" /> {marginPercent}٪
+                </span>
+              </div>
+              <div className="text-lg sm:text-xl font-extrabold text-emerald-800 mt-1.5">
+                {formatToman(pnl.grossProfit)}
+              </div>
+              <div className="text-[11px] text-emerald-700/70 mt-1">تعداد کل سفارش: {pnl.orderCount}</div>
             </div>
           </div>
-          <div className="rounded-2xl border border-slate-200 bg-white p-4">
-            <div className="text-xs text-slate-500">فروش حضوری صندوق (POS)</div>
-            <div className="text-lg font-extrabold text-emerald-700 mt-1">
-              {formatToman(pnl.posSales)}
-            </div>
-          </div>
-          <div className="rounded-2xl border border-slate-200 bg-white p-4">
-            <div className="text-xs text-slate-500">بهای تمام‌شده کالای فروش‌رفته (COGS)</div>
-            <div className="text-lg font-extrabold text-slate-800 mt-1">
-              {formatToman(pnl.totalCogs)}
-            </div>
-          </div>
-          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-            <div className="text-xs text-emerald-700 font-semibold">سود ناخالص واقعی</div>
-            <div className="text-lg font-extrabold text-emerald-800 mt-1">
-              {formatToman(pnl.grossProfit)}
-            </div>
-          </div>
-        </div>
 
-        {msg && (
-          <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-xs font-semibold text-indigo-800">
-            {msg}
-          </div>
-        )}
+          {toast && (
+            <div
+              className={`rounded-2xl border px-4 py-3 text-xs font-bold flex items-center gap-2 ${
+                toast.type === "ok"
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                  : "border-rose-200 bg-rose-50 text-rose-800"
+              }`}
+            >
+              {toast.type === "ok" ? (
+                <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+              ) : (
+                <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
+              )}
+              {toast.text}
+            </div>
+          )}
 
-        <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-3">
-          {[
-            { id: "products", label: "محصولات و موجودی", icon: Package },
-            { id: "cardex", label: "کاردکس انبار", icon: ClipboardList },
-            { id: "purchase", label: "ثبت فاکتور خرید", icon: PlusCircle },
-            { id: "orders", label: "سفارش‌ها", icon: ShoppingBag },
-            { id: "journals", label: "اسناد حسابداری دوبل", icon: BookOpen },
-          ].map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.id}
-                onClick={() => setTab(item.id as any)}
-                className={`flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-bold transition cursor-pointer ${
-                  tab === item.id
-                    ? "bg-indigo-600 text-white"
-                    : "bg-white border border-slate-200 text-slate-700 hover:bg-slate-100"
-                }`}
+          {tab === "products" && (
+            <div className="grid lg:grid-cols-12 gap-6">
+              <div className="lg:col-span-8 rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-2xs">
+                <div className="border-b border-slate-200 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+                  <span className="font-bold text-sm">
+                    کاتالوگ کالا و موجودی ({filteredVariants.length})
+                  </span>
+                  <div className="relative">
+                    <Search className="h-4 w-4 text-slate-400 absolute right-3 top-2.5" />
+                    <input
+                      type="text"
+                      placeholder="جستجو نام، SKU یا بارکد..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="rounded-xl border border-slate-200 bg-slate-50 pr-9 pl-3 py-1.5 text-xs focus:bg-white focus:border-indigo-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-right text-xs">
+                    <thead className="bg-slate-50 text-slate-500">
+                      <tr>
+                        <th className="p-3.5">نام کالا</th>
+                        <th className="p-3.5">SKU</th>
+                        <th className="p-3.5">قیمت فروش</th>
+                        <th className="p-3.5">میانگین خرید</th>
+                        <th className="p-3.5">وضعیت موجودی</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {filteredVariants.map((v) => {
+                        const prod = Array.isArray(v.products) ? v.products[0] : v.products;
+                        const stock = Array.isArray(v.stock_balances)
+                          ? v.stock_balances[0]
+                          : v.stock_balances;
+                        const qty = Number(stock?.physical_qty ?? 0);
+                        return (
+                          <tr key={v.id} className="hover:bg-slate-50/80 transition">
+                            <td className="p-3.5 font-bold text-slate-900">{prod?.title}</td>
+                            <td className="p-3.5 font-mono text-slate-500">{v.sku}</td>
+                            <td className="p-3.5 font-bold text-indigo-700">
+                              {formatToman(v.retail_price)}
+                            </td>
+                            <td className="p-3.5 text-slate-600">
+                              {formatToman(stock?.avg_unit_cost || 0)}
+                            </td>
+                            <td className="p-3.5">
+                              <span
+                                className={`rounded-full px-2.5 py-1 font-bold ${
+                                  qty === 0
+                                    ? "bg-rose-50 text-rose-700"
+                                    : qty <= 5
+                                    ? "bg-amber-50 text-amber-700"
+                                    : "bg-emerald-50 text-emerald-700"
+                                }`}
+                              >
+                                {qty} عدد
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <form
+                onSubmit={handleAddProduct}
+                className="lg:col-span-4 rounded-2xl border border-slate-200 bg-white p-5 space-y-3.5 h-fit shadow-2xs"
               >
-                <Icon className="h-4 w-4" />
-                {item.label}
-              </button>
-            );
-          })}
-        </div>
+                <h3 className="font-extrabold text-sm text-slate-900 border-b border-slate-100 pb-2.5">
+                  افزودن کالای جدید به انبار
+                </h3>
+                <input
+                  type="text"
+                  required
+                  placeholder="نام کالا (مثلاً: هودی مشکی نخ‌پنبه)"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-xs focus:border-indigo-500 focus:outline-none"
+                />
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    required
+                    dir="ltr"
+                    placeholder="SKU (HOOD-BLK)"
+                    value={sku}
+                    onChange={(e) => setSku(e.target.value)}
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-xs text-left font-mono"
+                  />
+                  <input
+                    type="text"
+                    dir="ltr"
+                    placeholder="بارکد"
+                    value={barcode}
+                    onChange={(e) => setBarcode(e.target.value)}
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-xs text-left font-mono"
+                  />
+                </div>
+                <input
+                  type="text"
+                  placeholder="دسته‌بندی"
+                  value={categoryName}
+                  onChange={(e) => setCategoryName(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-xs"
+                />
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="number"
+                    required
+                    placeholder="قیمت فروش (تومان)"
+                    value={retailPriceToman}
+                    onChange={(e) => setRetailPriceToman(e.target.value)}
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-xs"
+                  />
+                  <input
+                    type="number"
+                    required
+                    placeholder="قیمت خرید (تومان)"
+                    value={unitCostToman}
+                    onChange={(e) => setUnitCostToman(e.target.value)}
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-xs"
+                  />
+                </div>
+                <input
+                  type="number"
+                  required
+                  placeholder="موجودی اولیه (تعداد)"
+                  value={initialQty}
+                  onChange={(e) => setInitialQty(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-xs"
+                />
+                <button
+                  type="submit"
+                  className="w-full rounded-xl bg-indigo-600 py-2.5 text-xs font-bold text-white hover:bg-indigo-700 transition cursor-pointer"
+                >
+                  ثبت محصول و موجودی اولیه
+                </button>
+              </form>
+            </div>
+          )}
 
-        {tab === "products" && (
-          <div className="grid lg:grid-cols-12 gap-6">
-            <div className="lg:col-span-8 rounded-2xl border border-slate-200 bg-white overflow-hidden">
+          {tab === "cardex" && (
+            <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-2xs">
               <div className="border-b border-slate-200 px-4 py-3 font-bold text-sm">
-                لیست کالاها و موجودی لحظه‌ای ({variants.length})
+                کاردکس گردش کالا (Append-Only Ledger)
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-right text-xs">
                   <thead className="bg-slate-50 text-slate-500">
                     <tr>
-                      <th className="p-3">نام کالا</th>
-                      <th className="p-3">SKU / بارکد</th>
-                      <th className="p-3">قیمت فروش</th>
-                      <th className="p-3">میانگین خرید</th>
-                      <th className="p-3">موجودی</th>
+                      <th className="p-3.5">کالا</th>
+                      <th className="p-3.5">نوع حرکت</th>
+                      <th className="p-3.5">تغییر تعداد</th>
+                      <th className="p-3.5">فی بهای تمام‌شده</th>
+                      <th className="p-3.5">مانده نهایی</th>
+                      <th className="p-3.5">شرح</th>
+                      <th className="p-3.5">زمان</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {variants.map((v) => {
-                      const prod = Array.isArray(v.products) ? v.products[0] : v.products;
-                      const stock = Array.isArray(v.stock_balances)
-                        ? v.stock_balances[0]
-                        : v.stock_balances;
+                    {cardex.map((row) => {
+                      const v = Array.isArray(row.product_variants)
+                        ? row.product_variants[0]
+                        : row.product_variants;
+                      const p = Array.isArray(v?.products) ? v.products[0] : v?.products;
                       return (
-                        <tr key={v.id} className="hover:bg-slate-50">
-                          <td className="p-3 font-semibold">{prod?.title}</td>
-                          <td className="p-3 font-mono text-slate-500">{v.sku}</td>
-                          <td className="p-3 font-bold text-indigo-700">
-                            {formatToman(v.retail_price)}
-                          </td>
-                          <td className="p-3 text-slate-600">
-                            {formatToman(stock?.avg_unit_cost || 0)}
-                          </td>
-                          <td className="p-3">
-                            <span className="rounded-full bg-emerald-50 px-2.5 py-1 font-bold text-emerald-700">
-                              {stock?.physical_qty ?? 0} عدد
+                        <tr key={row.id} className="hover:bg-slate-50">
+                          <td className="p-3.5 font-bold">{p?.title || v?.sku}</td>
+                          <td className="p-3.5">
+                            <span className="rounded-lg bg-slate-100 px-2 py-1 font-mono text-[11px]">
+                              {row.movement_type}
                             </span>
                           </td>
+                          <td
+                            className={`p-3.5 font-extrabold ${
+                              row.qty_delta > 0 ? "text-emerald-600" : "text-rose-600"
+                            }`}
+                          >
+                            {row.qty_delta > 0 ? `+${row.qty_delta}` : row.qty_delta}
+                          </td>
+                          <td className="p-3.5">{formatToman(row.unit_cost)}</td>
+                          <td className="p-3.5 font-extrabold">{row.balance_after}</td>
+                          <td className="p-3.5 text-slate-600">{row.note}</td>
+                          <td className="p-3.5 text-slate-400">{formatFaDate(row.created_at)}</td>
                         </tr>
                       );
                     })}
@@ -299,290 +528,184 @@ export default function AdminDashboardPage() {
                 </table>
               </div>
             </div>
+          )}
 
+          {tab === "purchase" && (
             <form
-              onSubmit={handleAddProduct}
-              className="lg:col-span-4 rounded-2xl border border-slate-200 bg-white p-5 space-y-3"
+              onSubmit={handlePurchase}
+              className="max-w-xl rounded-2xl border border-slate-200 bg-white p-6 space-y-4 shadow-2xs"
             >
-              <h3 className="font-bold text-sm">افزودن کالای جدید به انبار</h3>
-              <input
-                type="text"
-                required
-                placeholder="نام کالا (مثلاً: هودی مشکی نخ‌پنبه)"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs"
-              />
-              <div className="grid grid-cols-2 gap-2">
-                <input
-                  type="text"
-                  required
-                  dir="ltr"
-                  placeholder="SKU (HOOD-BLK-L)"
-                  value={sku}
-                  onChange={(e) => setSku(e.target.value)}
-                  className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs text-left"
-                />
-                <input
-                  type="text"
-                  dir="ltr"
-                  placeholder="بارکد"
-                  value={barcode}
-                  onChange={(e) => setBarcode(e.target.value)}
-                  className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs text-left"
-                />
-              </div>
-              <input
-                type="text"
-                placeholder="دسته‌بندی"
-                value={categoryName}
-                onChange={(e) => setCategoryName(e.target.value)}
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs"
-              />
-              <div className="grid grid-cols-2 gap-2">
-                <input
-                  type="number"
-                  required
-                  placeholder="قیمت فروش (تومان)"
-                  value={retailPriceToman}
-                  onChange={(e) => setRetailPriceToman(e.target.value)}
-                  className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs"
-                />
-                <input
-                  type="number"
-                  required
-                  placeholder="قیمت خرید (تومان)"
-                  value={unitCostToman}
-                  onChange={(e) => setUnitCostToman(e.target.value)}
-                  className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs"
-                />
-              </div>
-              <input
-                type="number"
-                required
-                placeholder="موجودی اولیه (تعداد)"
-                value={initialQty}
-                onChange={(e) => setInitialQty(e.target.value)}
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs"
-              />
-              <button
-                type="submit"
-                className="w-full rounded-xl bg-indigo-600 py-2.5 text-xs font-bold text-white hover:bg-indigo-700 cursor-pointer"
-              >
-                ثبت محصول و موجودی اولیه
-              </button>
-            </form>
-          </div>
-        )}
-
-        {tab === "cardex" && (
-          <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
-            <div className="border-b border-slate-200 px-4 py-3 font-bold text-sm">
-              کاردکس گردش کالا (غیرقابل تغییر / Append-Only)
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-right text-xs">
-                <thead className="bg-slate-50 text-slate-500">
-                  <tr>
-                    <th className="p-3">کالا</th>
-                    <th className="p-3">نوع حرکت</th>
-                    <th className="p-3">تغییر تعداد</th>
-                    <th className="p-3">فی بهای تمام‌شده</th>
-                    <th className="p-3">مانده پس از سند</th>
-                    <th className="p-3">شرح</th>
-                    <th className="p-3">زمان</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {cardex.map((row) => {
-                    const v = Array.isArray(row.product_variants)
-                      ? row.product_variants[0]
-                      : row.product_variants;
-                    const p = Array.isArray(v?.products) ? v.products[0] : v?.products;
+              <h3 className="font-extrabold text-sm border-b border-slate-100 pb-2.5">
+                ثبت فاکتور خرید (ورود کالا + محاسبه میانگین موزون)
+              </h3>
+              <div>
+                <label className="block text-xs font-bold mb-1.5">انتخاب کالا</label>
+                <select
+                  value={purVariantId}
+                  onChange={(e) => setPurVariantId(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-xs bg-white"
+                >
+                  {variants.map((v) => {
+                    const p = Array.isArray(v.products) ? v.products[0] : v.products;
                     return (
-                      <tr key={row.id}>
-                        <td className="p-3 font-semibold">{p?.title || v?.sku}</td>
-                        <td className="p-3">
-                          <span className="rounded-md bg-slate-100 px-2 py-0.5 font-mono">
-                            {row.movement_type}
-                          </span>
-                        </td>
-                        <td
-                          className={`p-3 font-bold ${
-                            row.qty_delta > 0 ? "text-emerald-600" : "text-rose-600"
-                          }`}
-                        >
-                          {row.qty_delta > 0 ? `+${row.qty_delta}` : row.qty_delta}
-                        </td>
-                        <td className="p-3">{formatToman(row.unit_cost)}</td>
-                        <td className="p-3 font-bold">{row.balance_after}</td>
-                        <td className="p-3 text-slate-600">{row.note}</td>
-                        <td className="p-3 text-slate-400">{formatFaDate(row.created_at)}</td>
-                      </tr>
+                      <option key={v.id} value={v.id}>
+                        {p?.title} ({v.sku})
+                      </option>
                     );
                   })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {tab === "purchase" && (
-          <form
-            onSubmit={handlePurchase}
-            className="max-w-lg rounded-2xl border border-slate-200 bg-white p-6 space-y-4"
-          >
-            <h3 className="font-bold text-sm">ثبت فاکتور خرید (ورود کالا + محاسبه میانگین موزون)</h3>
-            <div>
-              <label className="block text-xs font-semibold mb-1">انتخاب کالا</label>
-              <select
-                value={purVariantId}
-                onChange={(e) => setPurVariantId(e.target.value)}
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs"
-              >
-                {variants.map((v) => {
-                  const p = Array.isArray(v.products) ? v.products[0] : v.products;
-                  return (
-                    <option key={v.id} value={v.id}>
-                      {p?.title} ({v.sku})
-                    </option>
-                  );
-                })}
-              </select>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-semibold mb-1">تعداد خرید</label>
-                <input
-                  type="number"
-                  required
-                  min={1}
-                  value={purQty}
-                  onChange={(e) => setPurQty(e.target.value)}
-                  className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs"
-                />
+                </select>
               </div>
-              <div>
-                <label className="block text-xs font-semibold mb-1">قیمت واحد خرید (تومان)</label>
-                <input
-                  type="number"
-                  required
-                  min={0}
-                  value={purCostToman}
-                  onChange={(e) => setPurCostToman(e.target.value)}
-                  className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs"
-                />
-              </div>
-            </div>
-            <div>
-              <label className="block text-xs font-semibold mb-1">توضیحات فاکتور</label>
-              <input
-                type="text"
-                value={purNote}
-                onChange={(e) => setPurNote(e.target.value)}
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs"
-              />
-            </div>
-            <button
-              type="submit"
-              className="w-full rounded-xl bg-emerald-600 py-2.5 text-xs font-bold text-white hover:bg-emerald-700 cursor-pointer"
-            >
-              ثبت فاکتور خرید و صدور سند حسابداری
-            </button>
-          </form>
-        )}
-
-        {tab === "orders" && (
-          <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
-            <div className="border-b border-slate-200 px-4 py-3 font-bold text-sm">
-              سفارش‌های آنلاین و حضوری ({orders.length})
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-right text-xs">
-                <thead className="bg-slate-50 text-slate-500">
-                  <tr>
-                    <th className="p-3">شماره سفارش</th>
-                    <th className="p-3">کانال</th>
-                    <th className="p-3">روش پرداخت</th>
-                    <th className="p-3">مشتری</th>
-                    <th className="p-3">جمع کل</th>
-                    <th className="p-3">COGS</th>
-                    <th className="p-3">تاریخ</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {orders.map((o) => (
-                    <tr key={o.id}>
-                      <td className="p-3 font-bold">#{o.order_number}</td>
-                      <td className="p-3">
-                        <span
-                          className={`rounded-full px-2 py-0.5 font-semibold ${
-                            o.channel === "ONLINE"
-                              ? "bg-indigo-50 text-indigo-700"
-                              : "bg-emerald-50 text-emerald-700"
-                          }`}
-                        >
-                          {o.channel === "ONLINE" ? "آنلاین" : "حضوری POS"}
-                        </span>
-                      </td>
-                      <td className="p-3 font-mono">{o.payment_method}</td>
-                      <td className="p-3">{o.customer_name}</td>
-                      <td className="p-3 font-bold">{formatToman(o.total_amount)}</td>
-                      <td className="p-3 text-slate-500">{formatToman(o.total_cogs)}</td>
-                      <td className="p-3 text-slate-400">{formatFaDate(o.created_at)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {tab === "journals" && (
-          <div className="space-y-4">
-            {journals.map((j) => (
-              <div key={j.id} className="rounded-2xl border border-slate-200 bg-white p-4">
-                <div className="flex items-center justify-between border-b border-slate-100 pb-2 mb-2 text-xs">
-                  <span className="font-bold">
-                    سند شماره #{j.entry_number} — {j.description}
-                  </span>
-                  <span className="text-slate-400">{j.entry_date}</span>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold mb-1.5">تعداد خرید</label>
+                  <input
+                    type="number"
+                    required
+                    min={1}
+                    value={purQty}
+                    onChange={(e) => setPurQty(e.target.value)}
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-xs"
+                  />
                 </div>
+                <div>
+                  <label className="block text-xs font-bold mb-1.5">قیمت واحد خرید (تومان)</label>
+                  <input
+                    type="number"
+                    required
+                    min={0}
+                    value={purCostToman}
+                    onChange={(e) => setPurCostToman(e.target.value)}
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-xs"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold mb-1.5">توضیحات فاکتور</label>
+                <input
+                  type="text"
+                  value={purNote}
+                  onChange={(e) => setPurNote(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-xs"
+                />
+              </div>
+              <button
+                type="submit"
+                className="w-full rounded-xl bg-emerald-600 py-3 text-xs font-bold text-white hover:bg-emerald-700 transition cursor-pointer"
+              >
+                ثبت فاکتور خرید و صدور سند حسابداری
+              </button>
+            </form>
+          )}
+
+          {tab === "orders" && (
+            <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-2xs">
+              <div className="border-b border-slate-200 px-4 py-3 font-bold text-sm">
+                سفارش‌های آنلاین و حضوری ({orders.length})
+              </div>
+              <div className="overflow-x-auto">
                 <table className="w-full text-right text-xs">
-                  <thead className="text-slate-400">
+                  <thead className="bg-slate-50 text-slate-500">
                     <tr>
-                      <th className="py-1">کد و نام حساب</th>
-                      <th className="py-1">بدهکار</th>
-                      <th className="py-1">بستانکار</th>
+                      <th className="p-3.5">شماره سفارش</th>
+                      <th className="p-3.5">کانال</th>
+                      <th className="p-3.5">روش پرداخت</th>
+                      <th className="p-3.5">مشتری</th>
+                      <th className="p-3.5">جمع کل</th>
+                      <th className="p-3.5">بهای تمام‌شده (COGS)</th>
+                      <th className="p-3.5">تاریخ</th>
                     </tr>
                   </thead>
-                  <tbody>
-                    {(j.journal_lines || []).map((line: any, idx: number) => {
-                      const acc = Array.isArray(line.chart_of_accounts)
-                        ? line.chart_of_accounts[0]
-                        : line.chart_of_accounts;
-                      return (
-                        <tr key={idx} className="border-t border-slate-50">
-                          <td className="py-1.5">
-                            <span className="font-mono text-slate-500 ml-2">{acc?.code}</span>
-                            {acc?.name}
-                          </td>
-                          <td className="py-1.5 text-emerald-700 font-semibold">
-                            {Number(line.debit) > 0 ? formatToman(line.debit) : "—"}
-                          </td>
-                          <td className="py-1.5 text-rose-700 font-semibold">
-                            {Number(line.credit) > 0 ? formatToman(line.credit) : "—"}
-                          </td>
-                        </tr>
-                      );
-                    })}
+                  <tbody className="divide-y divide-slate-100">
+                    {orders.map((o) => (
+                      <tr key={o.id} className="hover:bg-slate-50">
+                        <td className="p-3.5 font-extrabold">#{o.order_number}</td>
+                        <td className="p-3.5">
+                          <span
+                            className={`rounded-full px-2.5 py-1 font-bold ${
+                              o.channel === "ONLINE"
+                                ? "bg-indigo-50 text-indigo-700"
+                                : "bg-emerald-50 text-emerald-700"
+                            }`}
+                          >
+                            {o.channel === "ONLINE" ? "آنلاین" : "حضوری POS"}
+                          </span>
+                        </td>
+                        <td className="p-3.5 font-mono text-slate-600">{o.payment_method}</td>
+                        <td className="p-3.5">{o.customer_name}</td>
+                        <td className="p-3.5 font-extrabold text-slate-900">
+                          {formatToman(o.total_amount)}
+                        </td>
+                        <td className="p-3.5 text-slate-500">{formatToman(o.total_cogs)}</td>
+                        <td className="p-3.5 text-slate-400">{formatFaDate(o.created_at)}</td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>
-            ))}
-          </div>
-        )}
-      </main>
+            </div>
+          )}
+
+          {tab === "journals" && (
+            <div className="space-y-4">
+              {journals.map((j) => {
+                const lines = j.journal_lines || [];
+                const totalDebit = lines.reduce((s: number, l: any) => s + Number(l.debit || 0), 0);
+                const totalCredit = lines.reduce((s: number, l: any) => s + Number(l.credit || 0), 0);
+                return (
+                  <div key={j.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3 mb-3 text-xs">
+                      <span className="font-extrabold text-slate-900">
+                        سند شماره #{j.entry_number} — {j.description}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-bold text-emerald-700">
+                          تراز (بدهکار = بستانکار)
+                        </span>
+                        <span className="text-slate-400">{j.entry_date}</span>
+                      </div>
+                    </div>
+                    <table className="w-full text-right text-xs">
+                      <thead className="text-slate-400">
+                        <tr>
+                          <th className="py-1.5">کد و نام حساب</th>
+                          <th className="py-1.5">بدهکار</th>
+                          <th className="py-1.5">بستانکار</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {lines.map((line: any, idx: number) => {
+                          const acc = Array.isArray(line.chart_of_accounts)
+                            ? line.chart_of_accounts[0]
+                            : line.chart_of_accounts;
+                          return (
+                            <tr key={idx} className="border-t border-slate-50">
+                              <td className="py-2">
+                                <span className="font-mono text-slate-400 ml-2">{acc?.code}</span>
+                                <span className="font-semibold text-slate-800">{acc?.name}</span>
+                              </td>
+                              <td className="py-2 text-emerald-700 font-bold">
+                                {Number(line.debit) > 0 ? formatToman(line.debit) : "—"}
+                              </td>
+                              <td className="py-2 text-rose-700 font-bold">
+                                {Number(line.credit) > 0 ? formatToman(line.credit) : "—"}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        <tr className="border-t-2 border-slate-200 font-extrabold text-slate-900">
+                          <td className="py-2">جمع سند</td>
+                          <td className="py-2">{formatToman(totalDebit)}</td>
+                          <td className="py-2">{formatToman(totalCredit)}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </main>
+      </div>
     </div>
   );
 }

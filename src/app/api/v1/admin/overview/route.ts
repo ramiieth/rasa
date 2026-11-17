@@ -20,11 +20,14 @@ export async function GET() {
       journalRes,
       chequesRes,
       expensesRes,
+      customersRes,
+      smsTemplatesRes,
+      smsLogsRes,
     ] = await Promise.all([
       supabase
         .from("tenants")
         .select(
-          "id, slug, name, shipping_wallet_balance, sender_phone, sender_postal_code, sender_address, bank_card_number, enamad_code"
+          "id, slug, name, shipping_wallet_balance, sms_balance, sender_phone, sender_postal_code, sender_address, bank_card_number, enamad_code"
         )
         .eq("id", tenantId)
         .single(),
@@ -42,15 +45,15 @@ export async function GET() {
         )
         .eq("tenant_id", tenantId)
         .order("id", { ascending: false })
-        .limit(50),
+        .limit(60),
       supabase
         .from("orders")
         .select(
-          "id, order_number, channel, payment_method, bnpl_provider, bnpl_installments, status, customer_name, customer_mobile, shipping_carrier, shipping_status, tracking_barcode, receiver_postal_code, receiver_address, total_weight_grams, subtotal, tax_amount, shipping_cost, total_amount, total_cogs, refunded_amount, created_at"
+          "id, order_number, channel, payment_method, bnpl_provider, bnpl_installments, status, customer_name, customer_mobile, shipping_carrier, shipping_status, tracking_barcode, package_size, receiver_province, receiver_city, receiver_postal_code, receiver_address, total_weight_grams, print_count, is_checked, is_suspended, subtotal, tax_amount, shipping_cost, total_amount, total_cogs, refunded_amount, created_at, order_items(id, title, qty, unit_price)"
         )
         .eq("tenant_id", tenantId)
         .order("created_at", { ascending: false })
-        .limit(40),
+        .limit(60),
       supabase
         .from("journal_entries")
         .select(
@@ -58,7 +61,7 @@ export async function GET() {
         )
         .eq("tenant_id", tenantId)
         .order("entry_number", { ascending: false })
-        .limit(30),
+        .limit(35),
       supabase
         .from("cheques")
         .select("*")
@@ -69,6 +72,22 @@ export async function GET() {
         .select("*")
         .eq("tenant_id", tenantId)
         .order("created_at", { ascending: false }),
+      supabase
+        .from("customers")
+        .select("*")
+        .eq("tenant_id", tenantId)
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("sms_templates")
+        .select("*")
+        .eq("tenant_id", tenantId)
+        .order("event_key", { ascending: true }),
+      supabase
+        .from("sms_logs")
+        .select("*")
+        .eq("tenant_id", tenantId)
+        .order("id", { ascending: false })
+        .limit(40),
     ]);
 
     const orders = ordersRes.data || [];
@@ -94,6 +113,7 @@ export async function GET() {
         name: tenantRes.data?.name || session.tenantName,
         email: session.email,
         shippingWalletBalance: Number(tenantRes.data?.shipping_wallet_balance ?? 5000000),
+        smsBalance: Number(tenantRes.data?.sms_balance ?? 1000000),
         senderPhone: tenantRes.data?.sender_phone || "",
         senderPostalCode: tenantRes.data?.sender_postal_code || "",
         senderAddress: tenantRes.data?.sender_address || "",
@@ -106,6 +126,9 @@ export async function GET() {
       journals: journalRes.data || [],
       cheques: chequesRes.data || [],
       expenses: expensesRes.data || [],
+      customers: customersRes.data || [],
+      smsTemplates: smsTemplatesRes.data || [],
+      smsLogs: smsLogsRes.data || [],
       pnl: {
         onlineSales,
         posSales,

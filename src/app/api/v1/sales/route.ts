@@ -8,20 +8,21 @@ export async function POST(req: Request) {
     const body = await req.json();
     const channel = body.channel === "ONLINE" ? "ONLINE" : "POS";
     const paymentMethod = String(body.paymentMethod || "POS_CARD");
+    const bnplProvider = body.bnplProvider ? String(body.bnplProvider) : null;
+    const bnplInstallments = Number(body.bnplInstallments || (paymentMethod === "BNPL" ? 4 : 1));
     const customerName = String(body.customerName || "مشتری حضوری").trim();
     const customerMobile = String(body.customerMobile || "").trim();
     const shippingCarrier = String(body.shippingCarrier || "PISHTAZ");
     const receiverPostalCode = String(body.receiverPostalCode || "").trim();
     const receiverAddress = String(body.receiverAddress || "").trim();
-    const shippingCostRials = Number(body.shippingCostRials ?? Number(body.shippingCostToman || 0) * 10);
+    const shippingCostRials = Number(
+      body.shippingCostRials ?? Number(body.shippingCostToman || 0) * 10
+    );
     const idempotencyKey = body.idempotencyKey ? String(body.idempotencyKey) : null;
     const items = Array.isArray(body.items) ? body.items : [];
 
     if (items.length === 0) {
-      return NextResponse.json(
-        { error: "سبد خرید خالی است." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "سبد خرید خالی است." }, { status: 400 });
     }
 
     const supabase = getSupabaseAdmin();
@@ -64,6 +65,8 @@ export async function POST(req: Request) {
       p_receiver_postal_code: receiverPostalCode || null,
       p_receiver_address: receiverAddress || null,
       p_tracking_barcode: autoBarcode,
+      p_bnpl_provider: bnplProvider,
+      p_bnpl_installments: bnplInstallments,
     });
 
     if (error) {

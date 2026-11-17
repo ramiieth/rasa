@@ -24,9 +24,16 @@ import {
   Printer,
   Wallet,
   RefreshCw,
+  Landmark,
+  Settings,
+  RotateCcw,
 } from "lucide-react";
 import { formatToman, formatFaDate } from "@/lib/format";
-import { SHIPPING_METHODS } from "@/lib/shipping-calculator";
+import {
+  SHIPPING_METHODS,
+  SHIPPING_STATUS_LABELS,
+  ShippingStatus,
+} from "@/lib/shipping-calculator";
 
 interface OverviewData {
   tenant: {
@@ -35,19 +42,26 @@ interface OverviewData {
     name: string;
     email: string;
     shippingWalletBalance: number;
+    senderPhone: string;
+    senderPostalCode: string;
+    senderAddress: string;
+    bankCardNumber: string;
+    enamadCode: string;
   };
   variants: any[];
   cardex: any[];
   orders: any[];
   journals: any[];
+  cheques: any[];
+  expenses: any[];
   pnl: {
     onlineSales: number;
     posSales: number;
     totalRevenue: number;
     totalCogs: number;
+    totalExpenses: number;
     grossProfit: number;
-    totalTax: number;
-    totalShipping: number;
+    netProfit: number;
     orderCount: number;
   };
 }
@@ -57,12 +71,13 @@ export default function AdminDashboardPage() {
   const [data, setData] = useState<OverviewData | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<
-    "products" | "cardex" | "purchase" | "shipping" | "journals" | "orders"
+    "products" | "cardex" | "purchase" | "shipping" | "treasury" | "orders" | "journals" | "settings"
   >("products");
   const [searchQuery, setSearchQuery] = useState("");
   const [copiedTorob, setCopiedTorob] = useState(false);
   const [toast, setToast] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [selectedLabelOrder, setSelectedLabelOrder] = useState<any | null>(null);
+  const [batchPrintOpen, setBatchPrintOpen] = useState(false);
   const [topupAmountToman, setTopupAmountToman] = useState("500000");
 
   // Add product form
@@ -80,6 +95,26 @@ export default function AdminDashboardPage() {
   const [purCostToman, setPurCostToman] = useState("");
   const [purNote, setPurNote] = useState("فاکتور خرید از تامین‌کننده");
 
+  // Cheque & Expense forms
+  const [chqDir, setChqDir] = useState<"INCOMING" | "OUTGOING">("INCOMING");
+  const [chqNum, setChqNum] = useState("");
+  const [chqSayadi, setChqSayadi] = useState("");
+  const [chqParty, setChqParty] = useState("");
+  const [chqAmountToman, setChqAmountToman] = useState("");
+  const [chqDueDate, setChqDueDate] = useState("2026-12-01");
+
+  const [expCat, setExpCat] = useState("اجاره و قبوض");
+  const [expTitle, setExpTitle] = useState("");
+  const [expAmountToman, setExpAmountToman] = useState("");
+  const [expMethod, setExpMethod] = useState<"CASH" | "ONLINE_GATEWAY">("CASH");
+
+  // Store settings
+  const [senderPhone, setSenderPhone] = useState("");
+  const [senderPostalCode, setSenderPostalCode] = useState("");
+  const [senderAddress, setSenderAddress] = useState("");
+  const [bankCardNumber, setBankCardNumber] = useState("");
+  const [enamadCode, setEnamadCode] = useState("");
+
   const loadData = useCallback(async () => {
     setLoading(true);
     const res = await fetch("/api/v1/admin/overview");
@@ -87,11 +122,16 @@ export default function AdminDashboardPage() {
       router.push("/#provision");
       return;
     }
-    const json = await res.json();
+    const json: OverviewData = await res.json();
     setData(json);
     if (json.variants?.length > 0 && !purVariantId) {
       setPurVariantId(json.variants[0].id);
     }
+    setSenderPhone(json.tenant?.senderPhone || "");
+    setSenderPostalCode(json.tenant?.senderPostalCode || "");
+    setSenderAddress(json.tenant?.senderAddress || "");
+    setBankCardNumber(json.tenant?.bankCardNumber || "");
+    setEnamadCode(json.tenant?.enamadCode || "");
     setLoading(false);
   }, [router, purVariantId]);
 
@@ -192,6 +232,122 @@ export default function AdminDashboardPage() {
     }
   }
 
+  async function handleShippingStatusChange(orderId: string, shippingStatus: string) {
+    const res = await fetch("/api/v1/admin/shipping", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "UPDATE_SHIPPING_STATUS",
+        orderId,
+        shippingStatus,
+      }),
+    });
+    if (res.ok) {
+      setToast({ type: "ok", text: "وضعیت مرسوله پستی به‌روزرسانی شد." });
+      await loadData();
+    }
+  }
+
+  async function handleReturnOrder(order: any) {
+    const res = await fetch("/api/v1/admin/returns", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ orderId: order.id }),
+    });
+    const json = await res.json();
+    if (!res.ok) {
+      setToast({ type: "err", text: json.error || "خطا در مرجوعی سفارش" });
+      return;
+    }
+    const bnplNote =
+      order.payment_method === "BNPL"
+        ? ` و برنامه اقساط در ${order.bnpl_provider || "درگاه اقساطی"} تعدیل شد.`
+        : ".";
+    setToast({
+      type: "ok",
+      text: `سفارش #${order.order_number} مرجوع شد؛ کالا به کاردکس بازگشت و سند معکوس حسابداری صادر گردید${bnplNote}`,
+    });
+    await loadData();
+  }
+
+  async function handleAddCheque(e: React.FormEvent) {
+    e.preventDefault();
+    const res = await fetch("/api/v1/admin/treasury", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "ADD_CHEQUE",
+        direction: chqDir,
+        chequeNumber: chqNum,
+        sayadiId: chqSayadi,
+        partyName: chqParty,
+        amountToman: Number(chqAmountToman),
+        dueDate: chqDueDate,
+      }),
+    });
+    if (res.ok) {
+      setChqNum("");
+      setChqSayadi("");
+      setChqParty("");
+      setChqAmountToman("");
+      setToast({ type: "ok", text: "چک صیادی در خزانه‌داری ثبت شد." });
+      await loadData();
+    }
+  }
+
+  async function handleChequeStatus(chequeId: string, status: string) {
+    const res = await fetch("/api/v1/admin/treasury", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "UPDATE_CHEQUE_STATUS", chequeId, status }),
+    });
+    if (res.ok) await loadData();
+  }
+
+  async function handleAddExpense(e: React.FormEvent) {
+    e.preventDefault();
+    const res = await fetch("/api/v1/admin/treasury", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "ADD_EXPENSE",
+        category: expCat,
+        title: expTitle,
+        amountToman: Number(expAmountToman),
+        paymentMethod: expMethod,
+      }),
+    });
+    if (res.ok) {
+      setExpTitle("");
+      setExpAmountToman("");
+      setToast({
+        type: "ok",
+        text: "هزینه ثبت شد و در سود خالص و سند حسابداری دوبل اعمال گردید.",
+      });
+      await loadData();
+    }
+  }
+
+  async function handleSaveSettings(e: React.FormEvent) {
+    e.preventDefault();
+    const res = await fetch("/api/v1/admin/treasury", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "UPDATE_SETTINGS",
+        senderPhone,
+        senderPostalCode,
+        senderAddress,
+        bankCardNumber,
+        enamadCode,
+      }),
+    });
+    if (res.ok) {
+      setToast({ type: "ok", text: "تنظیمات فرستنده و فروشگاه با موفقیت ذخیره شد." });
+      await loadData();
+    }
+  }
+
   async function handleLogout() {
     await fetch("/api/v1/auth/logout", { method: "POST" });
     router.push("/");
@@ -212,9 +368,9 @@ export default function AdminDashboardPage() {
     );
   }
 
-  const { tenant, variants, cardex, orders, journals, pnl } = data;
+  const { tenant, variants, cardex, orders, journals, cheques, expenses, pnl } = data;
   const marginPercent =
-    pnl.totalRevenue > 0 ? Math.round((pnl.grossProfit / pnl.totalRevenue) * 100) : 0;
+    pnl.totalRevenue > 0 ? Math.round((pnl.netProfit / pnl.totalRevenue) * 100) : 0;
 
   const filteredVariants = variants.filter((v) => {
     const prod = Array.isArray(v.products) ? v.products[0] : v.products;
@@ -231,10 +387,14 @@ export default function AdminDashboardPage() {
     { id: "products", label: "محصولات و موجودی", icon: Package },
     { id: "cardex", label: "کاردکس انبار", icon: ClipboardList },
     { id: "purchase", label: "ثبت فاکتور خرید", icon: PlusCircle },
-    { id: "shipping", label: "پیشخوان پستی و ارسال", icon: Truck },
-    { id: "orders", label: "سفارش‌ها", icon: ShoppingBag },
+    { id: "shipping", label: "پیشخوان پستی و ماهکس", icon: Truck },
+    { id: "orders", label: "سفارش‌ها و مرجوعی", icon: ShoppingBag },
+    { id: "treasury", label: "خزانه‌داری، چک و هزینه", icon: Landmark },
     { id: "journals", label: "اسناد حسابداری دوبل", icon: BookOpen },
+    { id: "settings", label: "تنظیمات فروشگاه", icon: Settings },
   ];
+
+  const onlineOrders = orders.filter((o) => o.channel === "ONLINE");
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col lg:flex-row">
@@ -336,35 +496,37 @@ export default function AdminDashboardPage() {
           {/* KPI Cards */}
           <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
             <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs">
-              <div className="text-xs text-slate-500 font-medium">فروش آنلاین سایت</div>
+              <div className="text-xs text-slate-500 font-medium">فروش آنلاین + POS</div>
               <div className="text-lg sm:text-xl font-extrabold text-indigo-700 mt-1.5">
-                {formatToman(pnl.onlineSales)}
+                {formatToman(pnl.totalRevenue)}
               </div>
-              <div className="text-[11px] text-slate-400 mt-1">جمع کل سفارش‌های وب</div>
-            </div>
-            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs">
-              <div className="text-xs text-slate-500 font-medium">فروش حضوری صندوق (POS)</div>
-              <div className="text-lg sm:text-xl font-extrabold text-emerald-700 mt-1.5">
-                {formatToman(pnl.posSales)}
+              <div className="text-[11px] text-slate-400 mt-1">
+                آنلاین: {formatToman(pnl.onlineSales)}
               </div>
-              <div className="text-[11px] text-slate-400 mt-1">کل فروش گیشه مغازه</div>
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs">
               <div className="text-xs text-slate-500 font-medium">بهای تمام‌شده (COGS)</div>
               <div className="text-lg sm:text-xl font-extrabold text-slate-800 mt-1.5">
                 {formatToman(pnl.totalCogs)}
               </div>
-              <div className="text-[11px] text-slate-400 mt-1">بر اساس میانگین موزون</div>
+              <div className="text-[11px] text-slate-400 mt-1">میانگین موزون انبار</div>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs">
+              <div className="text-xs text-slate-500 font-medium">هزینه‌های جاری ثبت‌شده</div>
+              <div className="text-lg sm:text-xl font-extrabold text-rose-700 mt-1.5">
+                {formatToman(pnl.totalExpenses)}
+              </div>
+              <div className="text-[11px] text-slate-400 mt-1">اجاره، حقوق، بسته‌بندی</div>
             </div>
             <div className="rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-white p-4 shadow-2xs">
               <div className="flex items-center justify-between">
-                <span className="text-xs text-emerald-800 font-bold">سود ناخالص واقعی</span>
+                <span className="text-xs text-emerald-800 font-bold">سود خالص واقعی</span>
                 <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-bold text-emerald-800 flex items-center gap-0.5">
                   <TrendingUp className="h-3 w-3" /> {marginPercent}٪
                 </span>
               </div>
               <div className="text-lg sm:text-xl font-extrabold text-emerald-800 mt-1.5">
-                {formatToman(pnl.grossProfit)}
+                {formatToman(pnl.netProfit)}
               </div>
               <div className="text-[11px] text-emerald-700/70 mt-1">
                 تعداد کل سفارش: {pnl.orderCount}
@@ -415,7 +577,7 @@ export default function AdminDashboardPage() {
                         <th className="p-3.5">SKU</th>
                         <th className="p-3.5">قیمت فروش</th>
                         <th className="p-3.5">میانگین خرید</th>
-                        <th className="p-3.5">وضعیت موجودی</th>
+                        <th className="p-3.5">موجودی</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -535,7 +697,6 @@ export default function AdminDashboardPage() {
 
           {tab === "shipping" && (
             <div className="space-y-6">
-              {/* Postal Wallet + Active Carriers */}
               <div className="grid lg:grid-cols-12 gap-6">
                 <form
                   onSubmit={handleWalletTopup}
@@ -547,15 +708,12 @@ export default function AdminDashboardPage() {
                       کیف پول پیشخوان پستی رَسا
                     </span>
                     <span className="rounded-full bg-emerald-500/20 px-2.5 py-0.5 text-[10px] font-bold text-emerald-300">
-                      متصل به وب‌سرویس بارکد
+                      متصل به پست و ماهکس
                     </span>
                   </div>
                   <div className="text-2xl font-extrabold">
                     {formatToman(tenant.shippingWalletBalance)}
                   </div>
-                  <p className="text-[11px] text-slate-300 leading-relaxed">
-                    هزینه صدور بارکد پستی (پیشتاز، سفارشی، تیپاکس و چاپار) به‌صورت خودکار از کیف پول کسر می‌شود.
-                  </p>
                   <div className="flex gap-2 pt-1">
                     <input
                       type="number"
@@ -575,10 +733,20 @@ export default function AdminDashboardPage() {
                 </form>
 
                 <div className="lg:col-span-8 rounded-2xl border border-slate-200 bg-white p-5 space-y-3 shadow-2xs">
-                  <div className="font-extrabold text-sm text-slate-900">
-                    روش‌های ارسال فعال و فرمول محاسبه وزنی/حجمی (انواع پست)
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-extrabold text-sm text-slate-900">
+                      حامل‌های پستی فعال (شامل ماهکس، پیشتاز، سفارشی، تیپاکس، چاپار)
+                    </span>
+                    <button
+                      onClick={() => setBatchPrintOpen(true)}
+                      disabled={onlineOrders.length === 0}
+                      className="flex items-center gap-1.5 rounded-xl bg-slate-900 px-3.5 py-2 text-xs font-bold text-white hover:bg-indigo-600 disabled:opacity-40 cursor-pointer"
+                    >
+                      <Printer className="h-3.5 w-3.5" />
+                      چاپ گروهی لیبل‌ها ({onlineOrders.length})
+                    </button>
                   </div>
-                  <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-3">
+                  <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-2.5">
                     {SHIPPING_METHODS.map((m) => (
                       <div
                         key={m.code}
@@ -587,25 +755,17 @@ export default function AdminDashboardPage() {
                         <div className="font-bold text-xs text-slate-900">{m.title}</div>
                         <div className="text-[11px] text-slate-500">{m.estDays}</div>
                         <div className="text-xs font-extrabold text-indigo-700 pt-1">
-                          {m.isPostPaid
-                            ? "پس‌کرایه در مقصد"
-                            : `پایه: ${formatToman(m.baseRials)}`}
+                          {m.isPostPaid ? "پس‌کرایه در مقصد" : `پایه: ${formatToman(m.baseRials)}`}
                         </div>
-                        {!m.isPostPaid && (
-                          <div className="text-[10px] text-slate-400">
-                            +{formatToman(m.perKgRials)} به ازای هر کیلوگرم مازاد
-                          </div>
-                        )}
                       </div>
                     ))}
                   </div>
                 </div>
               </div>
 
-              {/* Postal Orders & Label Printing */}
               <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-2xs">
                 <div className="border-b border-slate-200 px-4 py-3 font-bold text-sm">
-                  مدیریت مرسولات پستی، صدور بارکد ۲۰ رقمی و چاپ لیبل
+                  مدیریت مرسولات پستی، وضعیت مرحله‌به‌مرحله و بارکد ۲۰ رقمی
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-right text-xs">
@@ -613,10 +773,10 @@ export default function AdminDashboardPage() {
                       <tr>
                         <th className="p-3.5">سفارش</th>
                         <th className="p-3.5">گیرنده / موبایل</th>
-                        <th className="p-3.5">نوع پست</th>
-                        <th className="p-3.5">وزن / کرایه</th>
-                        <th className="p-3.5">بارکد رهگیری ۲۰ رقمی</th>
-                        <th className="p-3.5">عملیات پستی</th>
+                        <th className="p-3.5">سرویس</th>
+                        <th className="p-3.5">مرحله ارسال</th>
+                        <th className="p-3.5">بارکد رهگیری</th>
+                        <th className="p-3.5">عملیات</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -635,8 +795,17 @@ export default function AdminDashboardPage() {
                             </span>
                           </td>
                           <td className="p-3.5">
-                            <div>{o.total_weight_grams || 500} گرم</div>
-                            <div className="text-slate-500">{formatToman(o.shipping_cost)}</div>
+                            <select
+                              value={o.shipping_status || "PENDING_PACK"}
+                              onChange={(e) => handleShippingStatusChange(o.id, e.target.value)}
+                              className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-bold"
+                            >
+                              {Object.entries(SHIPPING_STATUS_LABELS).map(([k, label]) => (
+                                <option key={k} value={k}>
+                                  {label}
+                                </option>
+                              ))}
+                            </select>
                           </td>
                           <td className="p-3.5 font-mono text-slate-700">
                             {o.tracking_barcode || "صادر نشده"}
@@ -647,14 +816,14 @@ export default function AdminDashboardPage() {
                               className="flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 cursor-pointer"
                             >
                               <RefreshCw className="h-3 w-3" />
-                              صدور بارکد
+                              بارکد
                             </button>
                             <button
                               onClick={() => setSelectedLabelOrder(o)}
                               className="flex items-center gap-1 rounded-lg bg-slate-900 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-indigo-600 cursor-pointer"
                             >
                               <Printer className="h-3 w-3" />
-                              چاپ لیبل پستی
+                              لیبل
                             </button>
                           </td>
                         </tr>
@@ -662,6 +831,268 @@ export default function AdminDashboardPage() {
                     </tbody>
                   </table>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {tab === "treasury" && (
+            <div className="grid lg:grid-cols-12 gap-6">
+              {/* Cheques */}
+              <div className="lg:col-span-7 space-y-4">
+                <form
+                  onSubmit={handleAddCheque}
+                  className="rounded-2xl border border-slate-200 bg-white p-5 space-y-3 shadow-2xs"
+                >
+                  <h3 className="font-extrabold text-sm">ثبت چک صیادی (وارده / صادره)</h3>
+                  <div className="grid sm:grid-cols-3 gap-2">
+                    <select
+                      value={chqDir}
+                      onChange={(e) => setChqDir(e.target.value as any)}
+                      className="rounded-xl border border-slate-300 px-3 py-2 text-xs bg-white"
+                    >
+                      <option value="INCOMING">چک دریافتی از مشتری</option>
+                      <option value="OUTGOING">چک پرداختی به تامین‌کننده</option>
+                    </select>
+                    <input
+                      type="text"
+                      required
+                      placeholder="شماره چک"
+                      value={chqNum}
+                      onChange={(e) => setChqNum(e.target.value)}
+                      className="rounded-xl border border-slate-300 px-3 py-2 text-xs"
+                    />
+                    <input
+                      type="text"
+                      dir="ltr"
+                      placeholder="شناسه صیادی ۱۶ رقمی"
+                      value={chqSayadi}
+                      onChange={(e) => setChqSayadi(e.target.value)}
+                      className="rounded-xl border border-slate-300 px-3 py-2 text-xs text-left font-mono"
+                    />
+                  </div>
+                  <div className="grid sm:grid-cols-3 gap-2">
+                    <input
+                      type="text"
+                      required
+                      placeholder="نام طرف حساب"
+                      value={chqParty}
+                      onChange={(e) => setChqParty(e.target.value)}
+                      className="rounded-xl border border-slate-300 px-3 py-2 text-xs"
+                    />
+                    <input
+                      type="number"
+                      required
+                      placeholder="مبلغ (تومان)"
+                      value={chqAmountToman}
+                      onChange={(e) => setChqAmountToman(e.target.value)}
+                      className="rounded-xl border border-slate-300 px-3 py-2 text-xs"
+                    />
+                    <input
+                      type="date"
+                      required
+                      value={chqDueDate}
+                      onChange={(e) => setChqDueDate(e.target.value)}
+                      className="rounded-xl border border-slate-300 px-3 py-2 text-xs"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    className="rounded-xl bg-indigo-600 px-5 py-2 text-xs font-bold text-white hover:bg-indigo-700 cursor-pointer"
+                  >
+                    ثبت چک در خزانه‌داری
+                  </button>
+                </form>
+
+                <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-2xs">
+                  <div className="border-b border-slate-200 px-4 py-3 font-bold text-sm">
+                    لیست چک‌های ثبت‌شده ({cheques.length})
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-right text-xs">
+                      <thead className="bg-slate-50 text-slate-500">
+                        <tr>
+                          <th className="p-3">نوع</th>
+                          <th className="p-3">طرف حساب / شماره</th>
+                          <th className="p-3">مبلغ</th>
+                          <th className="p-3">سررسید</th>
+                          <th className="p-3">وضعیت</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {cheques.map((c) => (
+                          <tr key={c.id}>
+                            <td className="p-3 font-bold">
+                              {c.direction === "INCOMING" ? "وارده" : "صادره"}
+                            </td>
+                            <td className="p-3">
+                              <div className="font-semibold">{c.party_name}</div>
+                              <div className="text-[11px] text-slate-400 font-mono">
+                                {c.cheque_number}
+                              </div>
+                            </td>
+                            <td className="p-3 font-bold">{formatToman(c.amount)}</td>
+                            <td className="p-3 font-mono">{c.due_date}</td>
+                            <td className="p-3">
+                              <select
+                                value={c.status}
+                                onChange={(e) => handleChequeStatus(c.id, e.target.value)}
+                                className="rounded-lg border border-slate-200 px-2 py-1 text-[11px] font-bold bg-white"
+                              >
+                                <option value="PENDING">در جریان</option>
+                                <option value="CLEARED">پاس‌شده</option>
+                                <option value="BOUNCED">برگشتی</option>
+                              </select>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+              {/* Expenses */}
+              <div className="lg:col-span-5 space-y-4">
+                <form
+                  onSubmit={handleAddExpense}
+                  className="rounded-2xl border border-slate-200 bg-white p-5 space-y-3 shadow-2xs"
+                >
+                  <h3 className="font-extrabold text-sm">ثبت هزینه جاری فروشگاه</h3>
+                  <select
+                    value={expCat}
+                    onChange={(e) => setExpCat(e.target.value)}
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs bg-white"
+                  >
+                    <option value="اجاره و قبوض">اجاره و قبوض</option>
+                    <option value="حقوق و دستمزد">حقوق و دستمزد</option>
+                    <option value="بسته‌بندی و کارتن">بسته‌بندی و کارتن</option>
+                    <option value="تبلیغات و ترب">تبلیغات و ترب</option>
+                  </select>
+                  <input
+                    type="text"
+                    required
+                    placeholder="شرح هزینه (مثلاً: اجاره مغازه آبان‌ماه)"
+                    value={expTitle}
+                    onChange={(e) => setExpTitle(e.target.value)}
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs"
+                  />
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      type="number"
+                      required
+                      placeholder="مبلغ (تومان)"
+                      value={expAmountToman}
+                      onChange={(e) => setExpAmountToman(e.target.value)}
+                      className="rounded-xl border border-slate-300 px-3 py-2 text-xs"
+                    />
+                    <select
+                      value={expMethod}
+                      onChange={(e) => setExpMethod(e.target.value as any)}
+                      className="rounded-xl border border-slate-300 px-3 py-2 text-xs bg-white"
+                    >
+                      <option value="CASH">پرداخت از صندوق نقدی</option>
+                      <option value="ONLINE_GATEWAY">پرداخت از حساب بانکی</option>
+                    </select>
+                  </div>
+                  <button
+                    type="submit"
+                    className="w-full rounded-xl bg-rose-600 py-2.5 text-xs font-bold text-white hover:bg-rose-700 cursor-pointer"
+                  >
+                    ثبت هزینه و کسر از سود خالص
+                  </button>
+                </form>
+
+                <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-2 shadow-2xs">
+                  <div className="font-bold text-xs text-slate-700">
+                    آخرین هزینه‌های ثبت‌شده ({expenses.length})
+                  </div>
+                  {expenses.map((ex) => (
+                    <div
+                      key={ex.id}
+                      className="flex items-center justify-between text-xs border-t border-slate-100 pt-2"
+                    >
+                      <div>
+                        <div className="font-bold">{ex.title}</div>
+                        <div className="text-[11px] text-slate-400">{ex.category}</div>
+                      </div>
+                      <span className="font-extrabold text-rose-700">
+                        {formatToman(ex.amount)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {tab === "orders" && (
+            <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-2xs">
+              <div className="border-b border-slate-200 px-4 py-3 font-bold text-sm">
+                سفارش‌های آنلاین، اقساطی BNPL، حضوری و عملیات مرجوعی ({orders.length})
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-right text-xs">
+                  <thead className="bg-slate-50 text-slate-500">
+                    <tr>
+                      <th className="p-3.5">سفارش</th>
+                      <th className="p-3.5">کانال / پرداخت</th>
+                      <th className="p-3.5">مشتری</th>
+                      <th className="p-3.5">جمع کل</th>
+                      <th className="p-3.5">وضعیت</th>
+                      <th className="p-3.5">تاریخ</th>
+                      <th className="p-3.5">مرجوعی کالا</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {orders.map((o) => (
+                      <tr key={o.id} className="hover:bg-slate-50">
+                        <td className="p-3.5 font-extrabold">#{o.order_number}</td>
+                        <td className="p-3.5">
+                          <span
+                            className={`rounded-full px-2.5 py-0.5 font-bold ${
+                              o.channel === "ONLINE"
+                                ? "bg-indigo-50 text-indigo-700"
+                                : "bg-emerald-50 text-emerald-700"
+                            }`}
+                          >
+                            {o.channel === "ONLINE" ? "آنلاین" : "POS"}
+                          </span>
+                          <div className="text-[10px] font-mono text-slate-500 mt-1">
+                            {o.payment_method === "BNPL"
+                              ? `BNPL (${o.bnpl_provider} - ${o.bnpl_installments} قسط)`
+                              : o.payment_method}
+                          </div>
+                        </td>
+                        <td className="p-3.5">{o.customer_name}</td>
+                        <td className="p-3.5 font-extrabold text-slate-900">
+                          {formatToman(o.total_amount)}
+                        </td>
+                        <td className="p-3.5">
+                          {o.status === "RETURNED" ? (
+                            <span className="rounded-full bg-rose-50 px-2.5 py-0.5 font-bold text-rose-700">
+                              مرجوع‌شده
+                            </span>
+                          ) : (
+                            <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 font-bold text-emerald-700">
+                              نهایی
+                            </span>
+                          )}
+                        </td>
+                        <td className="p-3.5 text-slate-400">{formatFaDate(o.created_at)}</td>
+                        <td className="p-3.5">
+                          <button
+                            disabled={o.status === "RETURNED"}
+                            onClick={() => handleReturnOrder(o)}
+                            className="flex items-center gap-1 rounded-lg border border-rose-200 px-2.5 py-1.5 text-[11px] font-bold text-rose-700 hover:bg-rose-50 disabled:opacity-35 cursor-pointer"
+                          >
+                            <RotateCcw className="h-3 w-3" />
+                            ثبت مرجوعی
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
           )}
@@ -785,56 +1216,6 @@ export default function AdminDashboardPage() {
             </form>
           )}
 
-          {tab === "orders" && (
-            <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-2xs">
-              <div className="border-b border-slate-200 px-4 py-3 font-bold text-sm">
-                سفارش‌های آنلاین و حضوری ({orders.length})
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-right text-xs">
-                  <thead className="bg-slate-50 text-slate-500">
-                    <tr>
-                      <th className="p-3.5">شماره سفارش</th>
-                      <th className="p-3.5">کانال</th>
-                      <th className="p-3.5">روش ارسال / پرداخت</th>
-                      <th className="p-3.5">مشتری</th>
-                      <th className="p-3.5">جمع کل</th>
-                      <th className="p-3.5">بهای تمام‌شده (COGS)</th>
-                      <th className="p-3.5">تاریخ</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {orders.map((o) => (
-                      <tr key={o.id} className="hover:bg-slate-50">
-                        <td className="p-3.5 font-extrabold">#{o.order_number}</td>
-                        <td className="p-3.5">
-                          <span
-                            className={`rounded-full px-2.5 py-1 font-bold ${
-                              o.channel === "ONLINE"
-                                ? "bg-indigo-50 text-indigo-700"
-                                : "bg-emerald-50 text-emerald-700"
-                            }`}
-                          >
-                            {o.channel === "ONLINE" ? "آنلاین" : "حضوری POS"}
-                          </span>
-                        </td>
-                        <td className="p-3.5 font-mono text-slate-600">
-                          {o.shipping_carrier || o.payment_method}
-                        </td>
-                        <td className="p-3.5">{o.customer_name}</td>
-                        <td className="p-3.5 font-extrabold text-slate-900">
-                          {formatToman(o.total_amount)}
-                        </td>
-                        <td className="p-3.5 text-slate-500">{formatToman(o.total_cogs)}</td>
-                        <td className="p-3.5 text-slate-400">{formatFaDate(o.created_at)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
           {tab === "journals" && (
             <div className="space-y-4">
               {journals.map((j) => {
@@ -900,10 +1281,85 @@ export default function AdminDashboardPage() {
               })}
             </div>
           )}
+
+          {tab === "settings" && (
+            <form
+              onSubmit={handleSaveSettings}
+              className="max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 space-y-4 shadow-2xs"
+            >
+              <h3 className="font-extrabold text-sm border-b border-slate-100 pb-2.5">
+                تنظیمات فرستنده روی لیبل پستی، کارت بانکی و اینماد
+              </h3>
+              <div className="grid sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold mb-1">تلفن فرستنده</label>
+                  <input
+                    type="text"
+                    dir="ltr"
+                    value={senderPhone}
+                    onChange={(e) => setSenderPhone(e.target.value)}
+                    placeholder="09110000000"
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs text-left"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold mb-1">کد پستی فرستنده</label>
+                  <input
+                    type="text"
+                    dir="ltr"
+                    value={senderPostalCode}
+                    onChange={(e) => setSenderPostalCode(e.target.value)}
+                    placeholder="4910000000"
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs text-left font-mono"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold mb-1">آدرس کامل فرستنده (چاپ روی لیبل)</label>
+                <input
+                  type="text"
+                  value={senderAddress}
+                  onChange={(e) => setSenderAddress(e.target.value)}
+                  placeholder="استان، شهر، خیابان، پلاک"
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs"
+                />
+              </div>
+              <div className="grid sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold mb-1">شماره کارت کارت‌به‌کارت</label>
+                  <input
+                    type="text"
+                    dir="ltr"
+                    value={bankCardNumber}
+                    onChange={(e) => setBankCardNumber(e.target.value)}
+                    placeholder="6037-9975-0000-0000"
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs text-left font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold mb-1">کد/لینک اینماد (eNamad)</label>
+                  <input
+                    type="text"
+                    dir="ltr"
+                    value={enamadCode}
+                    onChange={(e) => setEnamadCode(e.target.value)}
+                    placeholder="کد تایید اینماد"
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs text-left"
+                  />
+                </div>
+              </div>
+              <button
+                type="submit"
+                className="rounded-xl bg-indigo-600 px-6 py-2.5 text-xs font-bold text-white hover:bg-indigo-700 cursor-pointer"
+              >
+                ذخیره تنظیمات فروشگاه
+              </button>
+            </form>
+          )}
         </main>
       </div>
 
-      {/* Printable Postal Label Modal */}
+      {/* Single Printable Postal Label Modal */}
       {selectedLabelOrder && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 space-y-4 text-xs border-2 border-slate-900 shadow-2xl">
@@ -920,7 +1376,7 @@ export default function AdminDashboardPage() {
             </div>
 
             <div className="rounded-xl border border-slate-300 p-3 text-center space-y-1 bg-slate-50">
-              <div className="text-[10px] text-slate-500">بارکد ۲۰ رقمی شرکت ملی پست / حامل</div>
+              <div className="text-[10px] text-slate-500">بارکد ۲۰ رقمی مرسوله</div>
               <div className="font-mono font-extrabold text-sm tracking-widest">
                 {selectedLabelOrder.tracking_barcode || "198450000000001001"}
               </div>
@@ -930,6 +1386,8 @@ export default function AdminDashboardPage() {
               <div>
                 <div className="text-slate-400">فرستنده:</div>
                 <div className="font-bold">{tenant.name}</div>
+                <div className="text-[11px] text-slate-500">{tenant.senderPhone}</div>
+                <div className="text-[11px] text-slate-500">{tenant.senderAddress}</div>
               </div>
               <div>
                 <div className="text-slate-400">وزن و کرایه حمل:</div>
@@ -962,6 +1420,60 @@ export default function AdminDashboardPage() {
               >
                 بستن
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Batch Printable Postal Labels Modal */}
+      {batchPrintOpen && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/50 p-4">
+          <div className="mx-auto max-w-3xl rounded-2xl bg-white p-6 space-y-4">
+            <div className="no-print flex items-center justify-between border-b pb-3">
+              <span className="font-extrabold text-sm">
+                چاپ گروهی لیبل‌های پستی ({onlineOrders.length} مرسوله)
+              </span>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => window.print()}
+                  className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white cursor-pointer"
+                >
+                  چاپ همه لیبل‌ها
+                </button>
+                <button
+                  onClick={() => setBatchPrintOpen(false)}
+                  className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-bold cursor-pointer"
+                >
+                  بستن
+                </button>
+              </div>
+            </div>
+
+            <div className="grid sm:grid-cols-2 gap-4">
+              {onlineOrders.map((o) => (
+                <div
+                  key={o.id}
+                  className="rounded-xl border-2 border-slate-800 p-4 text-xs space-y-2 break-inside-avoid"
+                >
+                  <div className="flex justify-between font-bold border-b pb-1.5">
+                    <span>{o.shipping_carrier}</span>
+                    <span>#{o.order_number}</span>
+                  </div>
+                  <div className="font-mono text-center bg-slate-100 py-1 rounded">
+                    {o.tracking_barcode || "بدون بارکد"}
+                  </div>
+                  <div>
+                    <strong>فرستنده:</strong> {tenant.name} ({tenant.senderPhone || "—"})
+                  </div>
+                  <div>
+                    <strong>گیرنده:</strong> {o.customer_name} — {o.customer_mobile}
+                  </div>
+                  <div>
+                    <strong>کد پستی:</strong> {o.receiver_postal_code || "—"}
+                  </div>
+                  <div className="text-[11px] text-slate-600">{o.receiver_address}</div>
+                </div>
+              ))}
             </div>
           </div>
         </div>

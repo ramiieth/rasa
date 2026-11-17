@@ -13,8 +13,12 @@ import {
   Plus,
   Minus,
   Radio,
+  Wifi,
+  WifiOff,
+  RefreshCw,
 } from "lucide-react";
 import { formatToman } from "@/lib/format";
+import { printThermalReceiptWebSerial } from "@/lib/escpos";
 
 interface CartItem {
   variant_id: string;
@@ -24,6 +28,8 @@ interface CartItem {
   qty: number;
   maxQty: number;
 }
+
+const OFFLINE_QUEUE_KEY = "rasa_pos_offline_queue";
 
 export default function PosTerminalPage() {
   const router = useRouter();
@@ -35,11 +41,13 @@ export default function PosTerminalPage() {
   const [paymentMethod, setPaymentMethod] = useState<"POS_CARD" | "CASH" | "CARD_TO_CARD">("POS_CARD");
   const [customerName, setCustomerName] = useState("مشتری حضوری");
   const [submitting, setSubmitting] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
+  const [offlineCount, setOfflineCount] = useState(0);
   const [receipt, setReceipt] = useState<{
-    orderNumber: number;
+    orderNumber: number | string;
     totalRials: number;
     items: CartItem[];
-    method: string;
+    isOffline?: boolean;
   } | null>(null);
   const [error, setError] = useState("");
 
@@ -47,19 +55,67 @@ export default function PosTerminalPage() {
   const lastKeyTime = useRef(0);
 
   const loadProducts = useCallback(async () => {
-    const res = await fetch("/api/v1/admin/overview");
-    if (res.status === 401) {
-      router.push("/#provision");
-      return;
+    try {
+      const res = await fetch("/api/v1/admin/overview");
+      if (res.status === 401) {
+        router.push("/#provision");
+        return;
+      }
+      const json = await res.json();
+      setVariants(json.variants || []);
+      if (json.tenant?.name) setTenantName(json.tenant.name);
+      localStorage.setItem("rasa_pos_cached_variants", JSON.stringify(json.variants || []));
+    } catch {
+      const cached = localStorage.getItem("rasa_pos_cached_variants");
+      if (cached) setVariants(JSON.parse(cached));
     }
-    const json = await res.json();
-    setVariants(json.variants || []);
-    if (json.tenant?.name) setTenantName(json.tenant.name);
   }, [router]);
 
-  useEffect(() => {
-    loadProducts();
+  const syncOfflineQueue = useCallback(async () => {
+    if (!navigator.onLine) return;
+    const raw = localStorage.getItem(OFFLINE_QUEUE_KEY);
+    if (!raw) return;
+    const queue: any[] = JSON.parse(raw);
+    if (queue.length === 0) return;
+
+    const remaining: any[] = [];
+    for (const payload of queue) {
+      try {
+        const res = await fetch("/api/v1/sales", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) remaining.push(payload);
+      } catch {
+        remaining.push(payload);
+      }
+    }
+    localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(remaining));
+    setOfflineCount(remaining.length);
+    if (remaining.length < queue.length) await loadProducts();
   }, [loadProducts]);
+
+  useEffect(() => {
+    setIsOnline(navigator.onLine);
+    const existing = JSON.parse(localStorage.getItem(OFFLINE_QUEUE_KEY) || "[]");
+    setOfflineCount(existing.length);
+
+    const handleOnline = () => {
+      setIsOnline(true);
+      syncOfflineQueue();
+    };
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    loadProducts();
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, [loadProducts, syncOfflineQueue]);
 
   const addToCart = useCallback((v: any) => {
     const prod = Array.isArray(v.products) ? v.products[0] : v.products;
@@ -137,18 +193,37 @@ export default function PosTerminalPage() {
     if (cart.length === 0) return;
     setSubmitting(true);
     setError("");
+
+    const payload = {
+      channel: "POS",
+      paymentMethod,
+      customerName,
+      shippingCostToman: 0,
+      idempotencyKey: `pos-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      items: cart.map((i) => ({ variant_id: i.variant_id, qty: i.qty })),
+    };
+
+    if (!navigator.onLine) {
+      const queue = JSON.parse(localStorage.getItem(OFFLINE_QUEUE_KEY) || "[]");
+      queue.push(payload);
+      localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
+      setOfflineCount(queue.length);
+      setReceipt({
+        orderNumber: "آفلاین-" + queue.length,
+        totalRials,
+        items: [...cart],
+        isOffline: true,
+      });
+      setCart([]);
+      setSubmitting(false);
+      return;
+    }
+
     try {
       const res = await fetch("/api/v1/sales", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          channel: "POS",
-          paymentMethod,
-          customerName,
-          shippingCostToman: 0,
-          idempotencyKey: `pos-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          items: cart.map((i) => ({ variant_id: i.variant_id, qty: i.qty })),
-        }),
+        body: JSON.stringify(payload),
       });
       const json = await res.json();
       if (!res.ok) {
@@ -160,14 +235,41 @@ export default function PosTerminalPage() {
         orderNumber: json.order.order_number,
         totalRials: json.order.total_amount,
         items: [...cart],
-        method: paymentMethod,
       });
       setCart([]);
       await loadProducts();
     } catch {
-      setError("خطا در ارتباط با سرور");
+      const queue = JSON.parse(localStorage.getItem(OFFLINE_QUEUE_KEY) || "[]");
+      queue.push(payload);
+      localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
+      setOfflineCount(queue.length);
+      setReceipt({
+        orderNumber: "آفلاین-" + queue.length,
+        totalRials,
+        items: [...cart],
+        isOffline: true,
+      });
+      setCart([]);
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleThermalPrint() {
+    if (!receipt) return;
+    try {
+      await printThermalReceiptWebSerial({
+        storeName: tenantName,
+        orderNumber: receipt.orderNumber,
+        items: receipt.items.map((i) => ({
+          title: i.title,
+          qty: i.qty,
+          totalToman: formatToman(i.unitPriceRials * i.qty),
+        })),
+        totalToman: formatToman(receipt.totalRials),
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "خطا در چاپ حرارتی");
     }
   }
 
@@ -206,18 +308,38 @@ export default function PosTerminalPage() {
           <div>
             <div className="font-extrabold text-sm">{tenantName} — پایانه فروش حضوری (POS)</div>
             <div className="text-[11px] text-slate-400">
-              کسر آنی انبار و ثبت خودکار سند حسابداری
+              پشتیبانی آفلاین (Offline-First) + چاپگر حرارتی ESC/POS
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-3 py-1 text-[11px] font-bold text-emerald-400">
-          <Radio className="h-3.5 w-3.5 animate-pulse" />
-          اسکنر بارکد آماده است
+        <div className="flex flex-wrap items-center gap-2">
+          {offlineCount > 0 && (
+            <button
+              onClick={syncOfflineQueue}
+              className="flex items-center gap-1.5 rounded-full bg-amber-500 px-3 py-1 text-[11px] font-bold text-slate-950 cursor-pointer"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              همگام‌سازی {offlineCount} فاکتور آفلاین
+            </button>
+          )}
+          <div
+            className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-bold border ${
+              isOnline
+                ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-400"
+                : "bg-rose-500/15 border-rose-500/30 text-rose-400"
+            }`}
+          >
+            {isOnline ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}
+            {isOnline ? "متصل به سرور" : "حالت آفلاین فعال"}
+          </div>
+          <div className="hidden sm:flex items-center gap-1.5 rounded-full bg-indigo-500/15 border border-indigo-500/30 px-3 py-1 text-[11px] font-bold text-indigo-300">
+            <Radio className="h-3.5 w-3.5 animate-pulse" />
+            بارکدخوان آماده
+          </div>
         </div>
       </header>
 
       <main className="no-print mx-auto w-full max-w-7xl flex-1 p-4 grid lg:grid-cols-12 gap-4">
-        {/* Catalog */}
         <div className="lg:col-span-7 space-y-4">
           <div className="flex items-center gap-2.5 rounded-2xl bg-white px-4 py-3 border border-slate-200 shadow-2xs">
             <Barcode className="h-5 w-5 text-indigo-600 shrink-0" />
@@ -285,7 +407,6 @@ export default function PosTerminalPage() {
           </div>
         </div>
 
-        {/* Register Panel */}
         <div className="lg:col-span-5 rounded-3xl border border-slate-200 bg-white p-5 flex flex-col justify-between space-y-4 shadow-sm">
           <div className="space-y-3">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
@@ -417,7 +538,11 @@ export default function PosTerminalPage() {
               onClick={handleCheckout}
               className="w-full rounded-xl bg-emerald-600 py-3.5 text-sm font-extrabold text-white shadow-md shadow-emerald-600/20 hover:bg-emerald-700 disabled:opacity-50 transition cursor-pointer"
             >
-              {submitting ? "در حال ثبت..." : "ثبت نهایی فاکتور و کسر انبار"}
+              {submitting
+                ? "در حال ثبت..."
+                : isOnline
+                ? "ثبت نهایی فاکتور و کسر انبار"
+                : "ثبت فاکتور در صف آفلاین"}
             </button>
           </div>
         </div>
@@ -431,6 +556,11 @@ export default function PosTerminalPage() {
               <div className="text-slate-500 mt-1">
                 رسید فروش حضوری — شماره #{receipt.orderNumber}
               </div>
+              {receipt.isOffline && (
+                <div className="mt-1 text-[11px] font-bold text-amber-600">
+                  ذخیره‌شده در صف آفلاین (همگام‌سازی خودکار با اتصال اینترنت)
+                </div>
+              )}
             </div>
             <div className="space-y-2">
               {receipt.items.map((item) => (
@@ -446,17 +576,25 @@ export default function PosTerminalPage() {
               <span>مبلغ کل (با مالیات):</span>
               <span>{formatToman(receipt.totalRials)}</span>
             </div>
-            <div className="no-print flex gap-2 pt-2">
-              <button
-                onClick={() => window.print()}
-                className="flex-1 flex items-center justify-center gap-1.5 rounded-xl bg-slate-900 py-2.5 text-white font-bold cursor-pointer"
-              >
-                <Printer className="h-4 w-4" />
-                چاپ فیش
-              </button>
+            <div className="no-print space-y-2 pt-2">
+              <div className="flex gap-2">
+                <button
+                  onClick={() => window.print()}
+                  className="flex-1 flex items-center justify-center gap-1.5 rounded-xl bg-slate-900 py-2.5 text-white font-bold cursor-pointer"
+                >
+                  <Printer className="h-4 w-4" />
+                  چاپ مرورگر
+                </button>
+                <button
+                  onClick={handleThermalPrint}
+                  className="flex-1 flex items-center justify-center gap-1.5 rounded-xl bg-indigo-600 py-2.5 text-white font-bold cursor-pointer"
+                >
+                  چاپ حرارتی ESC/POS
+                </button>
+              </div>
               <button
                 onClick={() => setReceipt(null)}
-                className="flex-1 rounded-xl border border-slate-200 py-2.5 font-bold cursor-pointer"
+                className="w-full rounded-xl border border-slate-200 py-2.5 font-bold cursor-pointer"
               >
                 فاکتور جدید
               </button>

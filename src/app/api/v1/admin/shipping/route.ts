@@ -53,6 +53,23 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true, barcode });
     }
 
+    if (action === "UPDATE_SHIPPING_STATUS") {
+      const orderId = String(body.orderId || "");
+      const shippingStatus = String(body.shippingStatus || "PENDING_PACK");
+
+      const { error } = await supabase
+        .from("orders")
+        .update({ shipping_status: shippingStatus })
+        .eq("id", orderId)
+        .eq("tenant_id", session.tenantId);
+
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 400 });
+      }
+
+      return NextResponse.json({ ok: true });
+    }
+
     return NextResponse.json({ error: "عملیات نامعتبر" }, { status: 400 });
   } catch (err) {
     return NextResponse.json(

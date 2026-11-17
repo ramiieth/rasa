@@ -1,10 +1,24 @@
 export type ShippingCarrierCode =
   | "PISHTAZ"
   | "SEFARESHI"
+  | "MAHEX"
   | "TIPAX"
   | "CHAPAR"
   | "COURIER"
   | "COD";
+
+export type ShippingStatus =
+  | "PENDING_PACK"
+  | "HANDED_TO_CARRIER"
+  | "IN_TRANSIT"
+  | "DELIVERED";
+
+export const SHIPPING_STATUS_LABELS: Record<ShippingStatus, string> = {
+  PENDING_PACK: "در انتظار بسته‌بندی",
+  HANDED_TO_CARRIER: "تحویل به مامور پستی",
+  IN_TRANSIT: "در مسیر ارسال",
+  DELIVERED: "تحویل‌شده به گیرنده",
+};
 
 export interface ShippingMethodConfig {
   code: ShippingCarrierCode;
@@ -24,9 +38,9 @@ export const SHIPPING_METHODS: ShippingMethodConfig[] = [
     title: "پست پیشتاز (پیشخوان ملی پست)",
     subtitle: "صدور آنی بارکد ۲۰ رقمی + بیمه مرسوله",
     estDays: "۲ تا ۳ روز کاری",
-    baseRials: 490000, // ۴۹ هزار تومان پایه
-    perKgRials: 180000, // ۱۸ هزار تومان به ازای هر کیلوگرم اضافه
-    extraItemStepQty: 4, // اگر ۴ کالا یا بیشتر در بسته باشد، جهش حجمی اعمال می‌شود
+    baseRials: 490000,
+    perKgRials: 180000,
+    extraItemStepQty: 4,
     extraItemSurchargeRials: 290000,
   },
   {
@@ -40,8 +54,18 @@ export const SHIPPING_METHODS: ShippingMethodConfig[] = [
     extraItemSurchargeRials: 190000,
   },
   {
+    code: "MAHEX",
+    title: "ماهکس (Mahex اکسپرس درب به درب)",
+    subtitle: "پست سریع خصوصی با جمع‌آوری از محل فروشگاه و رهگیری لحظه‌ای",
+    estDays: "۱ تا ۲ روز کاری",
+    baseRials: 790000,
+    perKgRials: 230000,
+    extraItemStepQty: 5,
+    extraItemSurchargeRials: 320000,
+  },
+  {
     code: "TIPAX",
-    title: "تیپاکس (اکسپرس درب به درب)",
+    title: "تیپاکس (اکسپرس بین‌شهری)",
     subtitle: "ارسال سریع بین‌شهری با بیمه کامل",
     estDays: "۱ تا ۲ روز کاری",
     baseRials: 850000,
@@ -72,7 +96,7 @@ export const SHIPPING_METHODS: ShippingMethodConfig[] = [
   {
     code: "COD",
     title: "پس‌کرایه / پرداخت هزینه ارسال در محل",
-    subtitle: "تسویه کرایه حمل با مامور پست/تیپاکس هنگام تحویل",
+    subtitle: "تسویه کرایه حمل با مامور پست/ماهکس/تیپاکس هنگام تحویل",
     estDays: "۲ تا ۴ روز کاری",
     baseRials: 0,
     perKgRials: 0,
@@ -106,6 +130,7 @@ export function generatePostalBarcode(
   const prefixMap: Record<string, string> = {
     PISHTAZ: "19845",
     SEFARESHI: "29845",
+    MAHEX: "66400",
     TIPAX: "88100",
     CHAPAR: "77200",
     COURIER: "55300",

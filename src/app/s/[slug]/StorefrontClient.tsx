@@ -1,7 +1,18 @@
 "use client";
 
 import { useState } from "react";
-import { ShoppingCart, CheckCircle2, Trash2, Search, Plus, Minus, Truck } from "lucide-react";
+import Link from "next/link";
+import {
+  ShoppingCart,
+  CheckCircle2,
+  Trash2,
+  Search,
+  Plus,
+  Minus,
+  Truck,
+  CreditCard,
+  PackageSearch,
+} from "lucide-react";
 import { formatToman } from "@/lib/format";
 import {
   SHIPPING_METHODS,
@@ -29,6 +40,8 @@ export default function StorefrontClient({
   const [query, setQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("همه");
   const [shippingCarrier, setShippingCarrier] = useState<ShippingCarrierCode>("PISHTAZ");
+  const [payMode, setPayMode] = useState<"ONLINE_GATEWAY" | "BNPL">("ONLINE_GATEWAY");
+  const [bnplProvider, setBnplProvider] = useState<"SNAPP_PAY" | "TOROB_PAY" | "DIGI_PAY">("SNAPP_PAY");
   const [customerName, setCustomerName] = useState("");
   const [customerMobile, setCustomerMobile] = useState("");
   const [receiverPostalCode, setReceiverPostalCode] = useState("");
@@ -37,6 +50,8 @@ export default function StorefrontClient({
   const [doneOrder, setDoneOrder] = useState<{
     orderNumber: number;
     barcode?: string;
+    isBnpl?: boolean;
+    installmentRials?: number;
   } | null>(null);
   const [error, setError] = useState("");
 
@@ -86,6 +101,7 @@ export default function StorefrontClient({
   const shippingRials = calculateShippingRials(shippingCarrier, totalWeightGrams, totalQty);
   const taxRials = Math.round(subtotal * 0.1);
   const grandTotal = subtotal + shippingRials + taxRials;
+  const perInstallmentRials = Math.round(grandTotal / 4);
 
   async function handleTestCheckout(e: React.FormEvent) {
     e.preventDefault();
@@ -99,7 +115,9 @@ export default function StorefrontClient({
         body: JSON.stringify({
           channel: "ONLINE",
           tenantSlug: tenant.slug,
-          paymentMethod: "ONLINE_GATEWAY",
+          paymentMethod: payMode,
+          bnplProvider: payMode === "BNPL" ? bnplProvider : null,
+          bnplInstallments: payMode === "BNPL" ? 4 : 1,
           customerName: customerName || "خریدار اینترنتی",
           customerMobile,
           shippingCarrier,
@@ -118,6 +136,8 @@ export default function StorefrontClient({
       setDoneOrder({
         orderNumber: json.order.order_number,
         barcode: json.order.tracking_barcode,
+        isBnpl: payMode === "BNPL",
+        installmentRials: perInstallmentRials,
       });
       setCart([]);
     } catch {
@@ -155,10 +175,10 @@ export default function StorefrontClient({
           <div>
             <h1 className="text-lg sm:text-xl font-extrabold text-slate-900">{tenant.name}</h1>
             <p className="text-[11px] text-slate-500">
-              فروشگاه آنلاین متصل به انبار، پیشخوان پستی و حسابداری رَسا
+              فروشگاه آنلاین متصل به انبار، ماهکس، پست و درگاه اقساطی رَسا
             </p>
           </div>
-          <div className="flex items-center gap-3 flex-1 max-w-md">
+          <div className="flex items-center gap-2.5 flex-1 max-w-lg">
             <div className="relative flex-1">
               <Search className="h-4 w-4 text-slate-400 absolute right-3 top-2.5" />
               <input
@@ -169,7 +189,14 @@ export default function StorefrontClient({
                 className="w-full rounded-xl border border-slate-200 bg-slate-50 pr-9 pl-3 py-2 text-xs focus:bg-white focus:border-indigo-500 focus:outline-none"
               />
             </div>
-            <div className="flex items-center gap-2 rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-bold text-white shrink-0">
+            <Link
+              href={`/s/${tenant.slug}/track`}
+              className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-100 shrink-0"
+            >
+              <PackageSearch className="h-4 w-4 text-indigo-600" />
+              پیگیری مرسوله
+            </Link>
+            <div className="flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3 py-2 text-xs font-bold text-white shrink-0">
               <ShoppingCart className="h-4 w-4" />
               <span>{totalQty}</span>
             </div>
@@ -257,7 +284,7 @@ export default function StorefrontClient({
 
           <aside className="lg:col-span-4 rounded-3xl border border-slate-200 bg-white p-5 space-y-4 shadow-sm sticky top-20">
             <h3 className="font-extrabold text-sm border-b border-slate-100 pb-3">
-              سبد خرید، انتخاب نوع پست و تسویه
+              سبد خرید، ارسال و پرداخت (نقدی / اقساطی BNPL)
             </h3>
 
             {doneOrder && (
@@ -266,17 +293,22 @@ export default function StorefrontClient({
                   <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" />
                   سفارش #{doneOrder.orderNumber} ثبت و از انبار کسر شد!
                 </div>
+                {doneOrder.isBnpl && doneOrder.installmentRials && (
+                  <div className="text-[11px] text-emerald-900">
+                    طرح اقساطی ۴ ماهه فعال شد (هر قسط: {formatToman(doneOrder.installmentRials)})
+                  </div>
+                )}
                 {doneOrder.barcode && (
                   <div className="rounded-lg bg-white px-2.5 py-1.5 font-mono text-[11px] text-slate-700 border border-emerald-200">
-                    بارکد رهگیری پستی: <strong>{doneOrder.barcode}</strong>
+                    بارکد رهگیری: <strong>{doneOrder.barcode}</strong>
                   </div>
                 )}
               </div>
             )}
 
-            <div className="space-y-2 max-h-52 overflow-y-auto">
+            <div className="space-y-2 max-h-48 overflow-y-auto">
               {cart.length === 0 ? (
-                <div className="text-xs text-slate-400 py-5 text-center">سبد خرید خالی است</div>
+                <div className="text-xs text-slate-400 py-4 text-center">سبد خرید خالی است</div>
               ) : (
                 cart.map((item) => (
                   <div
@@ -316,11 +348,12 @@ export default function StorefrontClient({
             </div>
 
             <form onSubmit={handleTestCheckout} className="space-y-3 border-t border-slate-100 pt-3">
+              {/* Shipping selector incl. Mahex */}
               <div>
                 <label className="block text-[11px] font-bold text-slate-700 mb-1.5">
-                  روش ارسال مرسوله (محاسبه هوشمند بر اساس وزن و حجم)
+                  انتخاب سرویس پستی و لجستیک
                 </label>
-                <div className="space-y-1.5">
+                <div className="space-y-1.5 max-h-56 overflow-y-auto pr-0.5">
                   {SHIPPING_METHODS.map((m) => {
                     const active = shippingCarrier === m.code;
                     const rate = calculateShippingRials(m.code, totalWeightGrams, totalQty || 1);
@@ -348,6 +381,66 @@ export default function StorefrontClient({
                     );
                   })}
                 </div>
+              </div>
+
+              {/* Payment mode: Cash IPG vs 4-Installment BNPL */}
+              <div className="space-y-2">
+                <label className="block text-[11px] font-bold text-slate-700">
+                  شیوه پرداخت
+                </label>
+                <div className="grid grid-cols-2 gap-2 text-xs font-bold">
+                  <button
+                    type="button"
+                    onClick={() => setPayMode("ONLINE_GATEWAY")}
+                    className={`rounded-xl border py-2 flex items-center justify-center gap-1 cursor-pointer ${
+                      payMode === "ONLINE_GATEWAY"
+                        ? "border-indigo-600 bg-indigo-50 text-indigo-700"
+                        : "border-slate-200 text-slate-600"
+                    }`}
+                  >
+                    <CreditCard className="h-3.5 w-3.5" />
+                    پرداخت نقدی بانکی
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPayMode("BNPL")}
+                    className={`rounded-xl border py-2 cursor-pointer ${
+                      payMode === "BNPL"
+                        ? "border-emerald-600 bg-emerald-50 text-emerald-700"
+                        : "border-slate-200 text-slate-600"
+                    }`}
+                  >
+                    پرداخت اقساطی (۴ قسط)
+                  </button>
+                </div>
+
+                {payMode === "BNPL" && (
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-2.5 space-y-2">
+                    <div className="grid grid-cols-3 gap-1.5 text-[11px] font-bold">
+                      {[
+                        { id: "SNAPP_PAY", label: "اسنپ‌پی" },
+                        { id: "TOROB_PAY", label: "ترب‌پی" },
+                        { id: "DIGI_PAY", label: "دیجی‌پی" },
+                      ].map((p) => (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onClick={() => setBnplProvider(p.id as any)}
+                          className={`rounded-lg py-1.5 border cursor-pointer ${
+                            bnplProvider === p.id
+                              ? "bg-emerald-600 text-white border-emerald-600"
+                              : "bg-white text-slate-700 border-slate-200"
+                          }`}
+                        >
+                          {p.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="text-[11px] text-emerald-800 font-semibold text-center">
+                      پرداخت امروز (قسط اول): {formatToman(perInstallmentRials)} (۴ قسط بدون کارمزد)
+                    </div>
+                  </div>
+                )}
               </div>
 
               <input
@@ -381,7 +474,7 @@ export default function StorefrontClient({
               <input
                 type="text"
                 required
-                placeholder="آدرس دقیق پستی گیرنده (استان، شهر، خیابان، پلاک)"
+                placeholder="آدرس دقیق پستی گیرنده"
                 value={receiverAddress}
                 onChange={(e) => setReceiverAddress(e.target.value)}
                 className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs"
@@ -417,7 +510,11 @@ export default function StorefrontClient({
                 disabled={cart.length === 0 || loading}
                 className="w-full rounded-xl bg-emerald-600 py-3 text-xs font-extrabold text-white hover:bg-emerald-700 disabled:opacity-50 transition cursor-pointer"
               >
-                {loading ? "در حال ثبت و صدور بارکد پستی..." : "ثبت سفارش و دریافت آنی بارکد پستی"}
+                {loading
+                  ? "در حال ثبت..."
+                  : payMode === "BNPL"
+                  ? "ثبت سفارش اقساطی ۴ ماهه و صدور بارکد"
+                  : "ثبت سفارش و دریافت آنی بارکد پستی"}
               </button>
             </form>
           </aside>
